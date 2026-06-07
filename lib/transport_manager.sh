@@ -197,6 +197,13 @@ _regenerate_nginx_config() {
         enable_notls="true"
     fi
 
+    # Read debug mode from .env and export for generate_nginx_config()
+    if [[ -f "$env_file" ]]; then
+        local _ft_debug_val
+        _ft_debug_val=$(grep -m1 '^FT_DEBUG=' "$env_file" 2>/dev/null | cut -d= -f2- | tr -d '[:space:]')
+        export FT_DEBUG="${_ft_debug_val:-false}"
+    fi
+
     log_info "Regenerating nginx.conf (ws='$ws_sub' xhttp='$xhttp_sub' grpc='$grpc_sub' cloak=$enable_cloak notls=$enable_notls)..."
     local tmp_conf="${nginx_conf_dir}/nginx.conf.tmp"
     if generate_nginx_config "$cert_domain" "$has_tier2" "$ws_sub" "$xhttp_sub" "$grpc_sub" "$enable_cloak" "$enable_notls" \

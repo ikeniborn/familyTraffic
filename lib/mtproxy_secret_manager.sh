@@ -327,6 +327,7 @@ add_secret_to_db() {
 
         # Atomic replace
         mv "${MTPROXY_SECRETS_JSON}.tmp" "${MTPROXY_SECRETS_JSON}"
+        chmod 600 "${MTPROXY_SECRETS_JSON}"  # preserve 0600 after atomic mv (tmp inherits umask)
 
         secret_log_success "Secret added to database"
         secret_log_info "  Type: ${secret_type}"
@@ -391,6 +392,7 @@ remove_secret_from_db() {
 
         # Atomic replace
         mv "${MTPROXY_SECRETS_JSON}.tmp" "${MTPROXY_SECRETS_JSON}"
+        chmod 600 "${MTPROXY_SECRETS_JSON}"  # preserve 0600 after atomic mv (tmp inherits umask)
 
         secret_log_success "Secret removed from database"
 

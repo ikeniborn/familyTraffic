@@ -71,6 +71,7 @@ fi
 [[ -z "${YELLOW:-}" ]] && readonly YELLOW='\033[1;33m'
 [[ -z "${BLUE:-}" ]] && readonly BLUE='\033[0;34m'
 [[ -z "${CYAN:-}" ]] && readonly CYAN='\033[0;36m'
+[[ -z "${MAGENTA:-}" ]] && readonly MAGENTA='\033[0;35m'
 [[ -z "${NC:-}" ]] && readonly NC='\033[0m' # No Color
 
 # ============================================================================
@@ -326,15 +327,121 @@ get_user_info() {
         return 1
     fi
 
-    local user_info
-    user_info=$(jq -r ".users[] | select(.username == \"$username\")" "$USERS_JSON" 2>/dev/null)
+    local user_json
+    user_json=$(jq -r ".users[] | select(.username == \"$username\")" "$USERS_JSON" 2>/dev/null)
 
-    if [[ -z "$user_info" ]]; then
+    if [[ -z "$user_json" ]]; then
         log_error "User '$username' not found"
         return 1
     fi
 
-    echo "$user_info"
+    local uuid short_id fingerprint conn_type created ext_proxy
+    uuid=$(echo "$user_json" | jq -r '.uuid')
+    short_id=$(echo "$user_json" | jq -r '.shortId // "N/A"')
+    fingerprint=$(echo "$user_json" | jq -r '.fingerprint // "chrome"')
+    conn_type=$(echo "$user_json" | jq -r '.connection_type // "vpn"')
+    created=$(echo "$user_json" | jq -r '.created // "N/A"')
+    ext_proxy=$(echo "$user_json" | jq -r '.external_proxy_id // "none"')
+
+    # Header
+    echo ""
+    echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "${CYAN}  User: ${username}${NC}"
+    echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo ""
+    echo -e "  ${BLUE}Username:${NC}        $username"
+    echo -e "  ${BLUE}UUID:${NC}            $uuid"
+    echo -e "  ${BLUE}Short ID:${NC}        $short_id"
+    echo -e "  ${BLUE}Fingerprint:${NC}     $fingerprint"
+    echo -e "  ${BLUE}Connection type:${NC} $(get_connection_type_label "$conn_type")"
+    echo -e "  ${BLUE}External proxy:${NC}  $ext_proxy"
+    echo -e "  ${BLUE}Created:${NC}         $created"
+    echo ""
+
+    # VPN section: VLESS URI + QR
+    if [[ "$conn_type" == "vpn" || "$conn_type" == "both" ]]; then
+        local vless_uri
+        vless_uri=$(generate_vless_uri "$username" "$uuid")
+
+        echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+        echo -e "${CYAN}  VPN — VLESS Reality${NC}"
+        echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+        echo ""
+        echo -e "${MAGENTA}VLESS URI:${NC}"
+        echo "  $vless_uri"
+        echo ""
+
+        # QR code in terminal
+        if command -v qrencode &>/dev/null; then
+            echo -e "${BLUE}QR code (scan with V2Ray / Hiddify / Nekoray):${NC}"
+            qrencode -t ANSIUTF8 <<< "$vless_uri" 2>/dev/null || true
+            echo ""
+        else
+            echo -e "${YELLOW}[!]${NC} qrencode not installed — QR code unavailable"
+            echo ""
+        fi
+    fi
+
+    # Proxy section: SOCKS5 + HTTP URIs
+    if [[ "$conn_type" == "proxy" || "$conn_type" == "both" ]]; then
+        local proxy_password
+        proxy_password=$(echo "$user_json" | jq -r '.proxy_password // empty')
+
+        if [[ -n "$proxy_password" && "$proxy_password" != "null" ]]; then
+            local enable_public_proxy domain proxy_host socks_scheme http_scheme
+
+            enable_public_proxy="false"
+            domain=""
+            if [[ -f "$ENV_FILE" ]]; then
+                enable_public_proxy=$(grep -E "^ENABLE_PUBLIC_PROXY=" "$ENV_FILE" 2>/dev/null | cut -d'=' -f2 || echo "false")
+                domain=$(grep -E "^DOMAIN=" "$ENV_FILE" 2>/dev/null | cut -d'=' -f2 || echo "")
+            fi
+
+            local server_ip
+            server_ip=$(get_server_ip)
+
+            if [[ "$enable_public_proxy" == "true" && -n "$domain" ]]; then
+                socks_scheme="socks5s"
+                http_scheme="https"
+                proxy_host="$domain"
+            else
+                socks_scheme="socks5"
+                http_scheme="http"
+                proxy_host="$server_ip"
+            fi
+
+            local socks_uri="${socks_scheme}://${username}:${proxy_password}@${proxy_host}:1080"
+            local http_uri="${http_scheme}://${username}:${proxy_password}@${proxy_host}:8118"
+
+            echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+            echo -e "${CYAN}  Proxy — SOCKS5 / HTTP${NC}"
+            echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+            echo ""
+            echo -e "  ${BLUE}Username:${NC}  $username"
+            echo -e "  ${BLUE}Password:${NC}  $proxy_password"
+            echo ""
+            echo -e "  ${MAGENTA}SOCKS5 URI:${NC}"
+            echo "    $socks_uri"
+            echo ""
+            echo -e "  ${MAGENTA}HTTP URI:${NC}"
+            echo "    $http_uri"
+            echo ""
+
+            # QR for SOCKS5 URI
+            if command -v qrencode &>/dev/null; then
+                echo -e "${BLUE}QR code (SOCKS5):${NC}"
+                qrencode -t ANSIUTF8 <<< "$socks_uri" 2>/dev/null || true
+                echo ""
+            fi
+        else
+            echo -e "${YELLOW}[!]${NC} Proxy credentials not found for user '$username'"
+            echo ""
+        fi
+    fi
+
+    echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo ""
+
     return 0
 }
 

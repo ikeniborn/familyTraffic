@@ -287,6 +287,12 @@ orchestrate_installation() {
         return 1
     }
 
+    # Step 14.5: Setup logrotate for xray error logs
+    setup_xray_logrotate || {
+        echo -e "${YELLOW}Warning: Failed to setup logrotate for xray logs${NC}" >&2
+        # Non-critical: continue installation
+    }
+
     echo ""
     echo -e "${GREEN}✓ Installation orchestration completed successfully${NC}"
     echo ""
@@ -677,11 +683,18 @@ create_xray_config() {
     fi
 
     # Create Xray configuration
+    local _xray_loglevel="warning"
+    local _xray_access=""
+    if [[ "${FT_DEBUG:-false}" == "true" ]]; then
+        _xray_loglevel="debug"
+        _xray_access="/var/log/xray/access.log"
+    fi
+
     cat > "${XRAY_CONFIG}" <<EOF
 {
   "log": {
-    "loglevel": "warning",
-    "access": "/var/log/xray/access.log",
+    "loglevel": "${_xray_loglevel}",
+    "access": "${_xray_access}",
     "error": "/var/log/xray/error.log"
   },
   "dns": {
@@ -1035,6 +1048,10 @@ create_nginx_config() {
         return 1
     fi
 
+    # Debug mode: access_log destination
+    local _nginx_access_log="off"
+    [[ "${FT_DEBUG:-false}" == "true" ]] && _nginx_access_log="/var/log/nginx/access.log"
+
     # Create Nginx configuration for fake-site
     cat > "${NGINX_CONFIG}" <<EOF
 # Nginx Reverse Proxy Configuration for VLESS Reality Fake-site
@@ -1048,7 +1065,7 @@ server {
     server_name _;
 
     # Logging
-    access_log /var/log/nginx/access.log;
+    access_log ${_nginx_access_log};
     error_log /var/log/nginx/error.log;
 
     # Proxy settings
@@ -1129,6 +1146,13 @@ generate_nginx_config_wrapper() {
     local enable_notls="false"
     if [[ -f "${VLESS_DIR}/.env" ]] && grep -q '^PROXY_NOTLS_ENABLED=true' "${VLESS_DIR}/.env" 2>/dev/null; then
         enable_notls="true"
+    fi
+
+    # Read debug mode from .env (if already written; during install FT_DEBUG comes from env)
+    if [[ -f "${VLESS_DIR}/.env" ]]; then
+        local _ft_debug_val
+        _ft_debug_val=$(grep -m1 '^FT_DEBUG=' "${VLESS_DIR}/.env" 2>/dev/null | cut -d= -f2- | tr -d '[:space:]')
+        export FT_DEBUG="${_ft_debug_val:-${FT_DEBUG:-false}}"
     fi
 
     # Generate nginx.conf (Phase 0: no Tier 2 subdomains yet; they are added by transport_manager.sh)
@@ -1236,6 +1260,10 @@ EMAIL=${EMAIL:-}
 GHCR_IMAGE=${GHCR_IMAGE:-ghcr.io/OWNER/familytraffic}
 FT_IMAGE_TAG=${FT_IMAGE_TAG:-latest}
 ACME_EMAIL=${EMAIL:-}
+
+# Debug Mode — set to true to enable access logging (nginx + xray)
+# WARNING: access logs record source IPs and timestamps. Keep false in production.
+FT_DEBUG=${FT_DEBUG:-false}
 EOF
 
     if [[ ! -f "${ENV_FILE}" ]]; then
@@ -1890,6 +1918,46 @@ verify_file_permissions() {
 }
 
 # =============================================================================
+# FUNCTION: setup_xray_logrotate
+# =============================================================================
+# Description: Install logrotate configuration for xray logs (7-day retention).
+#              error.log always rotated; access.log included with missingok (active only when FT_DEBUG=true).
+# Returns: 0 on success, 1 on failure
+# =============================================================================
+setup_xray_logrotate() {
+    echo -e "${CYAN}[14.5/12] Setting up logrotate for xray error logs...${NC}"
+
+    local logrotate_file="/etc/logrotate.d/familytraffic-xray"
+
+    cat > "${logrotate_file}" <<'LOGROTATE_EOF'
+# familyTraffic — Xray log rotation (7-day retention)
+# error.log: always present. access.log: only when FT_DEBUG=true (missingok).
+
+/opt/familytraffic/logs/xray/error.log
+/opt/familytraffic/logs/xray/access.log {
+    daily
+    rotate 7
+    compress
+    delaycompress
+    missingok
+    notifempty
+    copytruncate
+}
+LOGROTATE_EOF
+
+    if [[ -f "${logrotate_file}" ]]; then
+        chmod 644 "${logrotate_file}"
+        echo "  ✓ Logrotate installed: ${logrotate_file}"
+        echo "  ✓ Retention: 7 days, compressed"
+        echo -e "${GREEN}✓ Xray log rotation configured${NC}"
+        return 0
+    else
+        echo -e "${RED}Failed to create ${logrotate_file}${NC}" >&2
+        return 1
+    fi
+}
+
+# =============================================================================
 # MODULE INITIALIZATION
 # =============================================================================
 
@@ -1906,6 +1974,7 @@ export -f create_xray_config
 export -f configure_proxy_firewall_rules
 export -f create_users_json
 export -f create_nginx_config
+export -f setup_xray_logrotate
 export -f create_docker_compose
 export -f create_env_file
 export -f create_docker_network
