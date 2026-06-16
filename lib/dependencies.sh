@@ -36,6 +36,7 @@ REQUIRED_PACKAGES=(
     "curl"
     "openssl"
     "fail2ban"        # v3.3: Brute-force protection (all proxy modes)
+    "logrotate"       # Rotate xray access/error logs (setup_xray_logrotate writes the config)
     "certbot"         # v3.3: Let's Encrypt client for TLS certificates
     "dnsutils"        # v3.3: DNS tools (dig) for certificate validation
     "tcpdump"         # v3.3: Packet capture for security testing
