@@ -165,12 +165,48 @@ sudo familytraffic-mtproxy list-secrets                      Список сек
 
 ## Клиентские приложения
 
-| Платформа | Приложение |
+### Android
+
+| Приложение | Особенности |
 |---|---|
-| Android | [v2rayNG](https://github.com/2dust/v2rayNG) |
-| iOS | v2rayTun, Shadowrocket |
-| Windows | [v2rayN](https://github.com/2dust/v2rayN) |
-| macOS / Linux | [v2rayA](https://v2raya.org) |
+| [v2rayNG](https://github.com/2dust/v2rayNG) | Классический клиент, VLESS Reality, импорт по ссылке/QR |
+| [Hiddify](https://github.com/hiddify/hiddify-app) | Простой GUI, все транспорты, рекомендуется |
+
+### iOS
+
+| Приложение | Особенности |
+|---|---|
+| [Hiddify](https://github.com/hiddify/hiddify-app) | Простой GUI, все транспорты, рекомендуется |
+| Shadowrocket | Платное, широкая поддержка протоколов |
+| Streisand | Бесплатное, VLESS Reality |
+
+### Windows
+
+| Приложение | Особенности |
+|---|---|
+| [Hiddify](https://github.com/hiddify/hiddify-app) | Простой GUI, VLESS Reality + все транспорты, **рекомендуется** |
+| [v2rayN](https://github.com/2dust/v2rayN) | Классический клиент, гибкая настройка |
+| [Nekoray / NekoBox](https://github.com/MatsuriDayo/nekoray) | Современный GUI, тонкая настройка маршрутизации |
+| [Clash Verge Rev](https://github.com/clash-verge-rev/clash-verge-rev) | Если нужен системный HTTP/SOCKS5 прокси с правилами |
+
+### macOS
+
+| Приложение | Особенности |
+|---|---|
+| [Hiddify](https://github.com/hiddify/hiddify-app) | Простой GUI, все транспорты, рекомендуется |
+| [v2rayA](https://v2raya.org) | Web-интерфейс, гибкая маршрутизация |
+
+### Linux
+
+| Приложение | Особенности |
+|---|---|
+| [v2rayA](https://v2raya.org) | Web-интерфейс, системный прокси, гибкая маршрутизация |
+| [Hiddify](https://github.com/hiddify/hiddify-app) | GUI, все транспорты |
+
+> **Подключение:** Ссылку `vless://...` или QR-код пользователя можно получить командой:
+> ```bash
+> sudo familytraffic show-user <name>
+> ```
 
 ---
 
