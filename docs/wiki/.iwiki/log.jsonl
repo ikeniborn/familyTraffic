@@ -1,0 +1,12 @@
+{"op":"init","source":"install.sh","page":"docs/wiki/architecture.md","date":"2026-06-29"}
+{"op":"init","source":"scripts/","page":"docs/wiki/cli-tools.md","date":"2026-06-29"}
+{"op":"init","source":"install.sh","page":"docs/wiki/installation.md","date":"2026-06-29"}
+{"op":"init","source":"lib/user_management.sh","page":"docs/wiki/user-management.md","date":"2026-06-29"}
+{"op":"init","source":"lib/transport_manager.sh","page":"docs/wiki/transports.md","date":"2026-06-29"}
+{"op":"init","source":"lib/mtproxy_manager.sh","page":"docs/wiki/mtproxy.md","date":"2026-06-29"}
+{"op":"init","source":"lib/external_proxy_manager.sh","page":"docs/wiki/proxy-chains.md","date":"2026-06-29"}
+{"op":"init","source":"lib/certbot_setup.sh","page":"docs/wiki/certificates.md","date":"2026-06-29"}
+{"op":"init","source":"lib/security_hardening.sh","page":"docs/wiki/security.md","date":"2026-06-29"}
+{"op":"init","source":"lib/orchestrator.sh","page":"docs/wiki/services.md","date":"2026-06-29"}
+{"op":"init","source":"docker/familytraffic/","page":"docs/wiki/docker.md","date":"2026-06-29"}
+{"op":"init","source":"tests/","page":"docs/wiki/testing.md","date":"2026-06-29"}
