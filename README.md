@@ -28,6 +28,8 @@ Client
   │
   ├─ TCP:1080 ──► familytraffic (TLS termination) ──► 127.0.0.1:10800 (SOCKS5)
   ├─ TCP:8118 ──► familytraffic (TLS termination) ──► 127.0.0.1:18118 (HTTP proxy)
+  ├─ TCP:1081 ──► familytraffic (no TLS, plaintext) ─► 127.0.0.1:10800 (SOCKS5)     [opt: enable_notls]
+  ├─ TCP:8119 ──► familytraffic (no TLS, plaintext) ─► 127.0.0.1:18118 (HTTP proxy) [opt: enable_notls]
   │
   ├─ TCP:2053 ──► familytraffic / mtg v2 (Fake TLS) ──► Telegram DCs  [MTProxy]
   └─ TCP:4443 ──► familytraffic / nginx (LE-cert, cloak) ──► реальный HTTPS [active probing protection]
