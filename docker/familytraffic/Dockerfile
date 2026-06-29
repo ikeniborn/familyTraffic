@@ -65,6 +65,10 @@ COPY --from=mtg-src /usr/bin/mtg /usr/bin/mtg
 # Config file (644 — no --chmod needed)
 COPY docker/familytraffic/supervisord.conf /etc/familytraffic/supervisord.conf
 
+# Bare `supervisorctl` defaults to /etc/supervisord.conf (which apt/apk ships pointing at
+# the wrong socket). Symlink it to the real config so `supervisorctl status` works without -c.
+RUN ln -sf /etc/familytraffic/supervisord.conf /etc/supervisord.conf
+
 # Runtime scripts — merged into one COPY to save a layer
 COPY --chmod=755 \
     docker/familytraffic/certbot-renew.sh \

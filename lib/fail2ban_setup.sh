@@ -129,33 +129,41 @@ create_familytraffic_proxy_jails() {
     cat > "$jail_file" <<'EOF'
 # Fail2ban jails for VLESS Reality Proxy
 #
-# Protects SOCKS5 (1080) and HTTP (8118) proxy ports from brute-force attacks
+# DISABLED BY DESIGN (enabled = false). These jails cannot ban real attackers in the
+# current architecture and are kept only as documented scaffolding:
+#   - nginx terminates TLS and forwards proxy traffic to xray over loopback WITHOUT the
+#     PROXY protocol, so xray only ever sees 127.0.0.1 — a real ban would hit loopback and
+#     break the nginx -> xray chain (hence ignoreip below as a safety belt).
+#   - Proxy auth uses 128-bit random credentials → brute-force is infeasible.
+#   - xray's HTTP inbound does not log auth failures at all; only SOCKS logs them, and to
+#     access.log (not error.log), in the form: "from tcp:<HOST>:port rejected  proxy/socks: ...".
 #
-# Configuration:
-#   - maxretry: 5 failed attempts
-#   - bantime: 3600 seconds (1 hour)
-#   - findtime: 600 seconds (10 minutes)
+# To re-enable meaningfully: add `proxy_protocol on` to the nginx proxy_pass blocks +
+# `sockopt.acceptProxyProtocol=true` to the xray inbounds, set logpath to access.log,
+# fix the familytraffic-proxy failregex to the real format above, then set enabled = true.
 #
 # Author: VLESS Reality VPN v3.2
 # Date: 2025-10-04
 
 [familytraffic-socks5]
-enabled  = true
+enabled  = false
 port     = 1080
 protocol = tcp
 filter   = familytraffic-proxy
-logpath  = /opt/familytraffic/logs/xray/error.log
+logpath  = /opt/familytraffic/logs/xray/access.log
+ignoreip = 127.0.0.1/8 ::1
 maxretry = 5
 bantime  = 3600
 findtime = 600
 action   = iptables-multiport[name=familytraffic-socks5, port="1080", protocol=tcp]
 
 [familytraffic-http]
-enabled  = true
+enabled  = false
 port     = 8118
 protocol = tcp
 filter   = familytraffic-proxy
-logpath  = /opt/familytraffic/logs/xray/error.log
+logpath  = /opt/familytraffic/logs/xray/access.log
+ignoreip = 127.0.0.1/8 ::1
 maxretry = 5
 bantime  = 3600
 findtime = 600
@@ -167,22 +175,24 @@ EOF
         cat >> "$jail_file" <<'EOF'
 
 [familytraffic-socks5-notls]
-enabled  = true
+enabled  = false
 port     = 1081
 protocol = tcp
 filter   = familytraffic-proxy
-logpath  = /opt/familytraffic/logs/xray/error.log
+logpath  = /opt/familytraffic/logs/xray/access.log
+ignoreip = 127.0.0.1/8 ::1
 maxretry = 5
 bantime  = 3600
 findtime = 600
 action   = iptables-multiport[name=familytraffic-socks5-notls, port="1081", protocol=tcp]
 
 [familytraffic-http-notls]
-enabled  = true
+enabled  = false
 port     = 8119
 protocol = tcp
 filter   = familytraffic-proxy
-logpath  = /opt/familytraffic/logs/xray/error.log
+logpath  = /opt/familytraffic/logs/xray/access.log
+ignoreip = 127.0.0.1/8 ::1
 maxretry = 5
 bantime  = 3600
 findtime = 600
@@ -275,21 +285,17 @@ create_xray_reality_jail() {
     cat > "$jail_file" <<EOF
 # Fail2ban jail for VLESS Reality Protocol (v5.32 DPI Hardening)
 #
-# Protects VLESS Reality port ($vless_port) from active probing attacks
-# Port auto-detected from HAProxy configuration
-# Higher maxretry (10) to avoid blocking legitimate configuration errors
-#
-# Configuration:
-#   - port: $port_list (auto-detected)
-#   - maxretry: 10 failed handshakes (active probing threshold)
-#   - bantime: 3600 seconds (1 hour)
-#   - findtime: 300 seconds (5 minutes)
+# DISABLED BY DESIGN (enabled = false). Reality answers active probes by transparently
+# proxying to the real dest — it does not emit loggable "rejected reality" lines, so this
+# filter never matches (0 bans observed in production). Anti-probing is handled inherently
+# by Reality's fallback, not by fail2ban. Kept as scaffolding; set enabled = true only if a
+# future xray version logs probe rejections that the failregex below can match.
 #
 # Author: VLESS Reality VPN v5.32
 # Date: 2025-10-30
 
 [xray-reality]
-enabled  = true
+enabled  = false
 port     = $port_list
 protocol = tcp
 filter   = xray-reality
@@ -337,29 +343,21 @@ reload_fail2ban() {
 # =============================================================================
 # FUNCTION: verify_fail2ban_jails
 # =============================================================================
-# Description: Verify that VLESS proxy jails are active
-# Returns: 0 if both jails active, 1 if any jail inactive
+# Description: Verify fail2ban is running. Proxy/Reality jails are disabled by design
+#              (see create_*_jail comments), so the active protection here is sshd.
+# Returns: 0 if fail2ban is up, 1 otherwise
 # =============================================================================
 verify_fail2ban_jails() {
-    echo -e "${CYAN}Verifying fail2ban jails...${NC}"
+    echo -e "${CYAN}Verifying fail2ban...${NC}"
 
-    local socks5_status
-    local http_status
-
-    socks5_status=$(fail2ban-client status familytraffic-socks5 2>/dev/null || echo "FAIL")
-    http_status=$(fail2ban-client status familytraffic-http 2>/dev/null || echo "FAIL")
-
-    if [[ "$socks5_status" == "FAIL" ]]; then
-        echo -e "${RED}✗ SOCKS5 jail not active${NC}"
+    if ! fail2ban-client ping &>/dev/null; then
+        echo -e "${RED}✗ fail2ban not responding${NC}"
         return 1
     fi
 
-    if [[ "$http_status" == "FAIL" ]]; then
-        echo -e "${RED}✗ HTTP jail not active${NC}"
-        return 1
-    fi
-
-    echo -e "${GREEN}✓ Both jails active (familytraffic-socks5, familytraffic-http)${NC}"
+    echo -e "${GREEN}✓ fail2ban running${NC}"
+    echo -e "${YELLOW}  Proxy/Reality jails are disabled by design (cosmetic in this architecture).${NC}"
+    echo -e "${YELLOW}  Active protection: sshd jail. See lib/fail2ban_setup.sh comments to re-enable.${NC}"
     return 0
 }
 
@@ -419,29 +417,17 @@ setup_fail2ban_for_proxy() {
     fi
 
     echo ""
-    echo -e "${GREEN}✓ Fail2ban setup complete (v5.32 with DPI Hardening)${NC}"
+    echo -e "${GREEN}✓ Fail2ban setup complete${NC}"
     echo ""
     echo "Configuration:"
-    echo "  - SOCKS5 jail active (port 1080)"
-    echo "  - HTTP jail active (port 8118)"
-    if [[ "${PROXY_NOTLS_ENABLED:-false}" == "true" ]]; then
-        echo "  - SOCKS5 no-TLS jail active (port 1081)"
-        echo "  - HTTP no-TLS jail active (port 8119)"
-    fi
-    echo "  - Reality jail active (ports 443, 8443) [NEW v5.32 - Active Probing Protection]"
+    echo "  - Proxy jails (SOCKS5/HTTP, TLS + no-TLS): DISABLED by design"
+    echo "  - Reality jail (443/8443): DISABLED by design"
+    echo "  - Filter/jail files installed as documented scaffolding (enabled = false)"
     echo ""
-    echo "Protection levels:"
-    echo "  - Proxy ports (SOCKS5/HTTP): maxretry=5, bantime=1h"
-    echo "  - Reality port (VLESS): maxretry=10, bantime=1h [Higher threshold for probing]"
-    echo ""
-    echo "Monitor banned IPs:"
-    echo "  sudo fail2ban-client status familytraffic-socks5"
-    echo "  sudo fail2ban-client status familytraffic-http"
-    if [[ "${PROXY_NOTLS_ENABLED:-false}" == "true" ]]; then
-        echo "  sudo fail2ban-client status familytraffic-socks5-notls"
-        echo "  sudo fail2ban-client status familytraffic-http-notls"
-    fi
-    echo "  sudo fail2ban-client status xray-reality  [NEW v5.32]"
+    echo "Why disabled: nginx terminates TLS without PROXY protocol → xray sees only 127.0.0.1;"
+    echo "proxy creds are 128-bit (brute-force infeasible); HTTP/Reality do not log catchable"
+    echo "auth failures. Active brute-force protection is the sshd jail. See lib/fail2ban_setup.sh"
+    echo "header comments for how to re-enable (requires proxy_protocol plumbing)."
     echo "═════════════════════════════════════════════════════"
     echo ""
 

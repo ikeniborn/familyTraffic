@@ -28,6 +28,8 @@ Client
   │
   ├─ TCP:1080 ──► familytraffic (TLS termination) ──► 127.0.0.1:10800 (SOCKS5)
   ├─ TCP:8118 ──► familytraffic (TLS termination) ──► 127.0.0.1:18118 (HTTP proxy)
+  ├─ TCP:1081 ──► familytraffic (no TLS, plaintext) ─► 127.0.0.1:10800 (SOCKS5)     [opt: enable_notls]
+  ├─ TCP:8119 ──► familytraffic (no TLS, plaintext) ─► 127.0.0.1:18118 (HTTP proxy) [opt: enable_notls]
   │
   ├─ TCP:2053 ──► familytraffic / mtg v2 (Fake TLS) ──► Telegram DCs  [MTProxy]
   └─ TCP:4443 ──► familytraffic / nginx (LE-cert, cloak) ──► реальный HTTPS [active probing protection]
@@ -211,4 +213,25 @@ sudo familytraffic-mtproxy list-secrets                      Список сек
 ## Документация
 
 - **[docs/GUIDES.md](docs/GUIDES.md)** — полная пошаговая инструкция
+- [docs/MIGRATION.md](docs/MIGRATION.md) — миграция со старых версий
+- [docs/SECURITY.md](docs/SECURITY.md) — модель безопасности
 - [CLAUDE.md](CLAUDE.md) — техническая документация для разработчиков
+
+### Wiki (`docs/wiki/`)
+
+Гранулярная техническая вики по подсистемам (semantic-индекс для `iwiki`):
+
+| Страница | Тема |
+|---|---|
+| [architecture](docs/wiki/architecture.md) | Single-container design, supervisord, traffic flow |
+| [installation](docs/wiki/installation.md) | `install.sh`, OS detection, миграция |
+| [cli-tools](docs/wiki/cli-tools.md) | CLI: `familytraffic*` команды |
+| [user-management](docs/wiki/user-management.md) | VLESS-пользователи, UUID, QR/URI |
+| [transports](docs/wiki/transports.md) | Reality (Tier 1), ws/xhttp/grpc (Tier 2), SNI routing |
+| [mtproxy](docs/wiki/mtproxy.md) | MTProxy (mtg v2), ee-секреты, `mtg.toml` |
+| [proxy-chains](docs/wiki/proxy-chains.md) | Per-user upstream proxy, whitelist |
+| [certificates](docs/wiki/certificates.md) | Let's Encrypt, certbot, автообновление |
+| [security](docs/wiki/security.md) | Hardening, fail2ban, UFW |
+| [services](docs/wiki/services.md) | Orchestrator, service ops, контейнер |
+| [docker](docs/wiki/docker.md) | 3-stage build, supervisord, CI/CD |
+| [testing](docs/wiki/testing.md) | BATS unit/integration/performance тесты |
