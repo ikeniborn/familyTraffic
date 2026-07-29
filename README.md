@@ -217,21 +217,9 @@ sudo familytraffic-mtproxy list-secrets                      Список сек
 - [docs/SECURITY.md](docs/SECURITY.md) — модель безопасности
 - [CLAUDE.md](CLAUDE.md) — техническая документация для разработчиков
 
-### Wiki (`docs/wiki/`)
+### Wiki (`iwiki`)
 
-Гранулярная техническая вики по подсистемам (semantic-индекс для `iwiki`):
-
-| Страница | Тема |
-|---|---|
-| [architecture](docs/wiki/architecture.md) | Single-container design, supervisord, traffic flow |
-| [installation](docs/wiki/installation.md) | `install.sh`, OS detection, миграция |
-| [cli-tools](docs/wiki/cli-tools.md) | CLI: `familytraffic*` команды |
-| [user-management](docs/wiki/user-management.md) | VLESS-пользователи, UUID, QR/URI |
-| [transports](docs/wiki/transports.md) | Reality (Tier 1), ws/xhttp/grpc (Tier 2), SNI routing |
-| [mtproxy](docs/wiki/mtproxy.md) | MTProxy (mtg v2), ee-секреты, `mtg.toml` |
-| [proxy-chains](docs/wiki/proxy-chains.md) | Per-user upstream proxy, whitelist |
-| [certificates](docs/wiki/certificates.md) | Let's Encrypt, certbot, автообновление |
-| [security](docs/wiki/security.md) | Hardening, fail2ban, UFW |
-| [services](docs/wiki/services.md) | Orchestrator, service ops, контейнер |
-| [docker](docs/wiki/docker.md) | 3-stage build, supervisord, CI/CD |
-| [testing](docs/wiki/testing.md) | BATS unit/integration/performance тесты |
+Technical documentation is stored in the central `familyTraffic` iwiki domain.
+Project binding is configured by `.iwiki.toml`; `.iwikiignore` excludes local and
+generated paths from source discovery. Use the iwiki MCP tools to search and read
+the wiki instead of repository-local `docs/wiki/` files.
