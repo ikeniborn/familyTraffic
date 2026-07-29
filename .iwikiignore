@@ -1,0 +1,14 @@
+.build-cache/
+.claude/
+.github/
+.husky/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.superpowers/
+.venv/
+.vite-build/
+dist/*
+node_modules/*
+docs/superpowers/
+docs/TODO.md
