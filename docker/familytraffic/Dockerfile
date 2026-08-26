@@ -42,12 +42,21 @@ RUN apk add --no-cache curl && \
 # =============================================================================
 FROM ${NGINX_IMAGE} AS final
 
+# `apk upgrade` first: the pinned nginx base ships older shared libraries than the
+# packages apk installs below. python3 is built against libexpat 2.8.x while the base
+# carries 2.7.0, and the dependency is recorded as the unchanged soname
+# `so:libexpat.so.1`, so apk does not upgrade it on its own. The result is a container
+# that dies at startup with
+#   ImportError: ... pyexpat...so: XML_SetAllocTrackerActivationThreshold: symbol not found
+# because supervisord (PID 1) imports xmlrpc.client → pyexpat.
+#
 # Runtime packages:
 #   supervisor     — process manager (PID 1); brings python3 as apk dep
 #   certbot        — ACME client for Let's Encrypt (Alpine community repo)
 #   iproute2       — provides 'ss' for port-80 pre-flight check (entrypoint.sh)
 #   netcat-openbsd — provides 'nc -w' for Docker healthcheck
-RUN apk add --no-cache \
+RUN apk upgrade --no-cache \
+    && apk add --no-cache \
     supervisor \
     certbot \
     iproute2 \
