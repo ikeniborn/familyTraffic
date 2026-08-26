@@ -1731,6 +1731,12 @@ set_permissions() {
     find "${KEYS_DIR}" -type f -exec chmod 600 {} \; 2>/dev/null || true
     chmod 600 "${ENV_FILE}" 2>/dev/null || true
 
+    # users.json holds client UUIDs. create_users_json writes it with `cat >`, so it
+    # lands at 644 under the default umask and post-install verification rejects it.
+    if [[ -f "${USERS_JSON}" ]]; then
+        chmod 600 "${USERS_JSON}" 2>/dev/null || true
+    fi
+
     # v5.30: Nginx config must be readable by nginx container user
     if [[ -f "${CONFIG_DIR}/nginx/nginx.conf" ]]; then
         chmod 644 "${CONFIG_DIR}/nginx/nginx.conf" 2>/dev/null || {
