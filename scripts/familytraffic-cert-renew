@@ -10,14 +10,12 @@
 # - ✅ Uses nginx -s reload for zero-downtime certificate updates
 # - ✅ familytraffic nginx uses fullchain.pem + privkey.pem directly
 # - ✅ Retry logic with exponential backoff for transient failures
-# - ✅ Automatic rollback on critical failures
 # - ✅ Pre-renewal validation (certificates, config, containers, disk space)
 # - ✅ Structured logging with severity levels (DEBUG/INFO/WARNING/ERROR/CRITICAL)
 # - ✅ Execution metrics tracking in JSON format
 # - ✅ Graceful degradation (continue with other domains if one fails)
 # - ✅ Verbose debug mode via FAMILYTRAFFIC_RENEW_VERBOSE=1
 # - ✅ Reloads nginx inside familytraffic container (VLESS Reality)
-# - ✅ Updates reverse_proxies.json database
 # - ✅ Supports multiple renewed domains
 #
 # Usage: Called automatically by certbot via --deploy-hook
@@ -184,47 +182,15 @@ retry_with_backoff() {
 }
 
 #==============================================================================
-# Backup and Rollback Functions (v5.25)
+# Backup and rollback (removed in v5.33)
 #==============================================================================
-
-backup_combined_pem() {
-    local domain="$1"
-    local combined="/etc/letsencrypt/live/$domain/combined.pem"
-    local backup="${combined}.backup"
-
-    if [[ ! -f "$combined" ]]; then
-        log_debug "No existing combined.pem to backup for $domain"
-        return 0
-    fi
-
-    if cp "$combined" "$backup"; then
-        log_debug "✅ Backed up combined.pem for $domain"
-        return 0
-    else
-        log_error "Failed to backup combined.pem for $domain"
-        return 1
-    fi
-}
-
-rollback_combined_pem() {
-    local domain="$1"
-    local combined="/etc/letsencrypt/live/$domain/combined.pem"
-    local backup="${combined}.backup"
-
-    if [[ ! -f "$backup" ]]; then
-        log_warning "No backup found for $domain, cannot rollback"
-        return 1
-    fi
-
-    if mv "$backup" "$combined"; then
-        log_info "✅ Rolled back combined.pem for $domain"
-        return 0
-    else
-        log_critical "Failed to rollback combined.pem for $domain"
-        return 1
-    fi
-}
-
+# backup_combined_pem and rollback_combined_pem guarded
+# /etc/letsencrypt/live/<domain>/combined.pem, a file HAProxy needed. v5.33
+# dropped HAProxy; nginx reads fullchain.pem and privkey.pem directly, so
+# combined.pem is no longer produced and there was nothing left to roll back.
+# Neither function was ever called. Certbot itself keeps the previous
+# certificate under archive/ and swaps the live/ symlinks atomically, which is
+# the rollback path that actually exists.
 #==============================================================================
 # Pre-Renewal Validation Functions (v5.25)
 #==============================================================================
