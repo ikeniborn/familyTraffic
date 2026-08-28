@@ -6,17 +6,19 @@
 # This script is called by certbot after successful certificate renewal.
 # Handles certificate updates for familytraffic container (nginx+xray+supervisord).
 #
-# Features:
-# - ✅ Uses nginx -s reload for zero-downtime certificate updates
-# - ✅ familytraffic nginx uses fullchain.pem + privkey.pem directly
-# - ✅ Retry logic with exponential backoff for transient failures
-# - ✅ Pre-renewal validation (certificates, config, containers, disk space)
-# - ✅ Structured logging with severity levels (DEBUG/INFO/WARNING/ERROR/CRITICAL)
-# - ✅ Execution metrics tracking in JSON format
-# - ✅ Graceful degradation (continue with other domains if one fails)
-# - ✅ Verbose debug mode via FAMILYTRAFFIC_RENEW_VERBOSE=1
-# - ✅ Reloads nginx inside familytraffic container (VLESS Reality)
-# - ✅ Supports multiple renewed domains
+# What it does, in order:
+#   1. Pre-renewal validation — certificate files, nginx config, container
+#      health, disk space, write permissions
+#   2. Reloads nginx inside the familytraffic container via SIGHUP, with
+#      exponential-backoff retries — zero downtime, and nginx reads the
+#      fullchain and private key directly
+#
+# Xray is deliberately not touched: Reality uses its own key pair and the
+# Tier 2 inbounds run with "security":"none" behind nginx, so no xray process
+# needs the renewed certificate.
+#
+# Also: structured logging with severity levels, JSON execution metrics, and a
+# verbose mode via FAMILYTRAFFIC_RENEW_VERBOSE=1.
 #
 # Usage: Called automatically by certbot via --deploy-hook
 # Location: /usr/local/bin/familytraffic-cert-renew
@@ -191,6 +193,8 @@ retry_with_backoff() {
 # Neither function was ever called. Certbot itself keeps the previous
 # certificate under archive/ and swaps the live/ symlinks atomically, which is
 # the rollback path that actually exists.
+#==============================================================================
+
 #==============================================================================
 # Pre-Renewal Validation Functions (v5.25)
 #==============================================================================
@@ -421,22 +425,11 @@ pre_renewal_validation() {
 }
 
 #==============================================================================
-# Legacy Functions (v4.2/v4.3 - preserved for backward compatibility)
+# Legacy functions (removed in v5.33)
 #==============================================================================
-
-reload_nginx_reverseproxy() {
-    # v5.33: reverse proxy container removed as legacy
-    # nginx runs inside the single familytraffic container — reload via supervisorctl
-    log_info "ℹ️  Reverse proxy removed in v5.33 — nginx runs inside familytraffic container"
-    log_info "    To reload nginx: docker exec familytraffic supervisorctl signal SIGHUP nginx"
-    return 0
-}
-
-update_database_cert_info() {
-    # Reverse proxy database removed in v5.33 — no-op
-    return 0
-}
-
+# reload_nginx_reverseproxy and update_database_cert_info were kept as no-op
+# stubs when the reverse-proxy container and its database were dropped. Their
+# only callers were the renewal phases that existed solely to call them.
 #==============================================================================
 # Main Execution (v5.25 - Enhanced)
 #==============================================================================
@@ -476,18 +469,10 @@ main() {
         exit 1
     fi
 
-    # Track per-domain status for graceful degradation
-    declare -A domain_status
-
-    # Mark all domains as success initially; individual failures will update per-domain status
-    for domain in $renewed_domains; do
-        domain_status["$domain"]="success"
-    done
-
     # PHASE 2: Reload familytraffic (zero-downtime via nginx -s reload)
     # Nginx uses fullchain.pem + privkey.pem directly — no combined.pem needed (v5.30)
     log_info ""
-    log_info "━━━ Phase 2: nginx -s reload (zero-downtime) ━━━"
+    log_info "━━━ Phase 2: nginx reload (zero-downtime) ━━━"
 
     if docker ps --format '{{.Names}}' | grep -q "familytraffic"; then
         if retry_with_backoff "$RETRY_MAX_ATTEMPTS" "$RETRY_INITIAL_DELAY" "$RETRY_MAX_DELAY" \
@@ -505,62 +490,29 @@ main() {
         log_warning "familytraffic container not running — skipping reload (non-critical if not installed)"
     fi
 
-    # PHASE 4: Restart Xray container (v5.25 - with retry)
-    log_info ""
-    log_info "━━━ Phase 4: Restarting Xray container ━━━"
-
-    if retry_with_backoff "$RETRY_MAX_ATTEMPTS" 1 5 docker exec familytraffic supervisorctl restart xray; then
-        sleep 2
-
-        if docker exec familytraffic supervisorctl status xray 2>/dev/null | grep -q "RUNNING"; then
-            log_info "✅ Xray process restarted successfully inside familytraffic"
-        else
-            log_error "❌ Xray process failed to restart inside familytraffic"
-            # Non-critical - continue
-        fi
-    else
-        log_error "❌ Failed to restart Xray container after $RETRY_MAX_ATTEMPTS attempts"
-        # Non-critical - continue
-    fi
-
-    # PHASE 5: Reload Nginx reverse proxy (v5.25 - with retry)
-    log_info ""
-    log_info "━━━ Phase 5: Reloading Nginx reverse proxy ━━━"
-
-    if ! retry_with_backoff "$RETRY_MAX_ATTEMPTS" 1 5 reload_nginx_reverseproxy; then
-        log_warning "Failed to reload Nginx reverse proxy (non-critical)"
-        # Non-critical - continue
-    fi
-
-    # PHASE 6: Update database (v5.25 - with retry)
-    log_info ""
-    log_info "━━━ Phase 6: Updating database ━━━"
-
-    for domain in $renewed_domains; do
-        if [[ "${domain_status[$domain]}" == "success" ]]; then
-            if ! retry_with_backoff "$RETRY_MAX_ATTEMPTS" 1 5 update_database_cert_info "$domain"; then
-                log_warning "Failed to update database for $domain (non-critical)"
-                # Non-critical - continue
-            fi
-        fi
-    done
+    # Xray is deliberately left alone. It never reads the Let's Encrypt files:
+    # Reality uses its own key pair, and the Tier 2 inbounds run with
+    # "security":"none" because nginx terminates TLS in front of them. The
+    # former "Phase 4" restarted xray on every renewal, dropping every live
+    # VLESS session roughly every 60 days for no benefit.
+    #
+    # The former phases 5 and 6 called reload_nginx_reverseproxy and
+    # update_database_cert_info, both no-op stubs since v5.33, each wrapped in
+    # retry_with_backoff — retries around a function that cannot fail. They
+    # printed section headers that made the log read like work was happening.
 
     # Calculate execution time
     local end_time=$(date +%s)
     local execution_time=$((end_time - START_TIME))
 
-    # Determine final status
+    # Reaching this point means validation passed and nginx reloaded: both
+    # earlier failure paths exit non-zero. There is no per-domain outcome to
+    # aggregate — validation covers all domains at once and the nginx reload is
+    # a single operation for the whole certificate set.
     local final_status="success"
-    local failed_domains=""
-    for domain in $renewed_domains; do
-        if [[ "${domain_status[$domain]}" == "failed" ]]; then
-            final_status="partial_success"
-            failed_domains="$failed_domains $domain"
-        fi
-    done
 
     # Save metrics
-    save_renewal_metrics "$renewed_domains" "$final_status" "$execution_time" "$failed_domains"
+    save_renewal_metrics "$renewed_domains" "$final_status" "$execution_time" ""
 
     # Summary
     log_info ""
@@ -570,20 +522,9 @@ main() {
     log_info "Execution time: ${execution_time}s"
     log_info "Status: $final_status"
 
-    if [[ "$final_status" == "success" ]]; then
-        log_info "✅ Deploy hook completed successfully"
-        log_info "All services reloaded with new certificates"
-        exit 0
-    elif [[ "$final_status" == "partial_success" ]]; then
-        log_warning "⚠️  Deploy hook completed with partial success"
-        log_warning "Failed domains:$failed_domains"
-        log_info "Check logs: $LOG_FILE"
-        exit 0  # Don't fail if some domains succeeded
-    else
-        log_error "❌ Deploy hook failed"
-        log_error "Check logs: $LOG_FILE"
-        exit 1
-    fi
+    log_info "✅ Deploy hook completed successfully"
+    log_info "nginx reloaded with the new certificate"
+    exit 0
 }
 
 main "$@"
