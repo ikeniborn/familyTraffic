@@ -44,8 +44,16 @@
 
 set -euo pipefail
 
-# Source QR generator module for client configuration export
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Shared helpers. This module re-exports write_preserving_inode, which is defined
+# in common.sh, so it must load it rather than assume a caller did: sourcing this
+# file on its own otherwise aborts under `set -e` with
+# "export: write_preserving_inode: not a function".
+# shellcheck source=lib/common.sh
+source "${SCRIPT_DIR}/common.sh"
+
+# Source QR generator module for client configuration export
 if [[ -f "${SCRIPT_DIR}/qr_generator.sh" ]]; then
     source "${SCRIPT_DIR}/qr_generator.sh"
 fi
