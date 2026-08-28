@@ -1,12 +1,26 @@
 #!/usr/bin/env bats
-# tests/unit/test_validation.bats - Unit tests for validation module
+# tests/unit/test_validation.bats - Unit tests for the input validators
+#
+# v5.33 reduced lib/validation.sh to two reverse-proxy no-op stubs and moved
+# the real validators into the modules that own them, so each is sourced from
+# its current home:
+#   validate_username        lib/user_management.sh (needs common.sh first)
+#   validate_port/_subnet    lib/network_params.sh
+#   validate_ip              lib/proxy_whitelist.sh
+#
+# lib/proxy_whitelist.sh is the IPv4+IPv6 implementation. lib/ufw_whitelist.sh
+# declares a second, IPv4-only validate_ip and shadows this one in the CLI —
+# that is tracked as CQ-002 and is deliberately not asserted here.
 
 load ../test_helper
 
 setup() {
     setup_test_env
     source "${LIB_DIR}/logger.sh"
-    source "${LIB_DIR}/validation.sh"
+    source "${LIB_DIR}/common.sh"
+    source "${LIB_DIR}/user_management.sh"
+    source "${LIB_DIR}/network_params.sh"
+    source "${LIB_DIR}/proxy_whitelist.sh"
 }
 
 teardown() {
@@ -163,65 +177,13 @@ teardown() {
     [ "$status" -eq 1 ]
 }
 
-# UUID validation tests
-@test "validate_uuid accepts valid UUID v4" {
-    run validate_uuid "550e8400-e29b-41d4-a716-446655440000"
-    [ "$status" -eq 0 ]
-}
-
-@test "validate_uuid rejects invalid UUID format" {
-    run validate_uuid "invalid-uuid"
-    [ "$status" -eq 1 ]
-}
-
-@test "validate_uuid rejects empty UUID" {
-    run validate_uuid ""
-    [ "$status" -eq 1 ]
-}
-
-# Domain validation tests
-@test "validate_domain accepts valid domain google.com" {
-    run validate_domain "google.com"
-    [ "$status" -eq 0 ]
-}
-
-@test "validate_domain accepts subdomain www.google.com" {
-    run validate_domain "www.google.com"
-    [ "$status" -eq 0 ]
-}
-
-@test "validate_domain accepts long domain" {
-    run validate_domain "subdomain.example.domain.com"
-    [ "$status" -eq 0 ]
-}
-
-@test "validate_domain rejects domain with spaces" {
-    run validate_domain "google .com"
-    [ "$status" -eq 1 ]
-}
-
-@test "validate_domain rejects domain with special chars" {
-    run validate_domain "google@.com"
-    [ "$status" -eq 1 ]
-}
-
-@test "validate_domain rejects empty domain" {
-    run validate_domain ""
-    [ "$status" -eq 1 ]
-}
-
-# Path validation tests
-@test "validate_path accepts valid absolute path" {
-    run validate_path "/opt/vless"
-    [ "$status" -eq 0 ]
-}
-
-@test "validate_path rejects relative path" {
-    run validate_path "relative/path"
-    [ "$status" -eq 1 ]
-}
-
-@test "validate_path rejects empty path" {
-    run validate_path ""
-    [ "$status" -eq 1 ]
-}
+# Removed: validate_uuid, validate_domain, and validate_path assertions.
+#
+# None of the three is defined anywhere in this repository — they are not
+# functions that moved during the v5.33 refactor, they never existed. UUIDs are
+# generated, never parsed from input; domains are checked by the purpose-built
+# validate_dns_for_domain, validate_mtproxy_domain, and validate_fake_tls_domain
+# rather than a generic syntax validator.
+#
+# Adding production functions solely to satisfy these assertions would invert
+# the point of a test suite, so the assertions go instead.

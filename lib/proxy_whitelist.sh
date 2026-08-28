@@ -639,19 +639,23 @@ regenerate_proxy_routing() {
 }
 
 # ============================================================================
-# FUNCTION: reload_xray (stub - expects function from user_management.sh)
+# FUNCTION: reload_xray (fallback - user_management.sh provides the real one)
 # ============================================================================
-reload_xray() {
-    # This function should be provided by user_management.sh.
-    # Fallback for v5.33 single-container: restart only the xray process
-    # inside the container via supervisorctl (nginx/certbot are not affected).
-    if docker ps --format '{{.Names}}' | grep -q "^familytraffic$"; then
-        docker exec familytraffic supervisorctl -c /etc/familytraffic/supervisord.conf signal SIGHUP xray 2>/dev/null && return 0
-        docker exec familytraffic supervisorctl -c /etc/familytraffic/supervisord.conf restart xray 2>/dev/null
-        return $?
-    fi
-    return 0
-}
+# Defined only when user_management.sh has not already provided it. The CLI
+# sources user_management.sh first, so there the logging implementation wins;
+# this fallback exists for the standalone mode at the bottom of this file.
+if ! declare -f reload_xray >/dev/null 2>&1; then
+    reload_xray() {
+        # Fallback for v5.33 single-container: restart only the xray process
+        # inside the container via supervisorctl (nginx/certbot are not affected).
+        if docker ps --format '{{.Names}}' | grep -q "^familytraffic$"; then
+            docker exec familytraffic supervisorctl -c /etc/familytraffic/supervisord.conf signal SIGHUP xray 2>/dev/null && return 0
+            docker exec familytraffic supervisorctl -c /etc/familytraffic/supervisord.conf restart xray 2>/dev/null
+            return $?
+        fi
+        return 0
+    }
+fi
 
 # ============================================================================
 # Export Functions
