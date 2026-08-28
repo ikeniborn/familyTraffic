@@ -35,6 +35,11 @@
 
 set -euo pipefail
 
+# Shared helpers (validate_ip). Sourced explicitly rather than relying on the
+# CLI having loaded common.sh first; the guard inside makes it idempotent.
+# shellcheck source=lib/common.sh
+source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
+
 # ============================================================================
 # Global Variables (conditional to avoid conflicts when sourced by CLI)
 # ============================================================================
@@ -72,72 +77,12 @@ log_error() {
 }
 
 # ============================================================================
-# FUNCTION: validate_ip
+# FUNCTION: validate_ip — moved to lib/common.sh
 # ============================================================================
-# Description: Validate IP address format (IPv4, IPv6, CIDR notation)
-# Arguments:
-#   $1 - IP address or CIDR range to validate
-# Returns: 0 if valid, 1 if invalid
+# Shared with ufw_whitelist.sh so the two cannot drift apart again; see the note
+# there. Callers below print their own message on rejection, which is why the
+# shared version stays silent.
 # ============================================================================
-validate_ip() {
-    local ip="$1"
-
-    # Check if empty
-    if [[ -z "$ip" ]]; then
-        log_error "IP address cannot be empty"
-        return 1
-    fi
-
-    # IPv4 with optional CIDR (e.g., 192.168.1.1 or 192.168.1.0/24)
-    local ipv4_regex='^([0-9]{1,3}\.){3}[0-9]{1,3}(\/[0-9]{1,2})?$'
-
-    # IPv6 with optional CIDR (simplified check)
-    local ipv6_regex='^([0-9a-fA-F]{0,4}:){2,7}[0-9a-fA-F]{0,4}(\/[0-9]{1,3})?$'
-
-    if [[ "$ip" =~ $ipv4_regex ]]; then
-        # Validate IPv4 octets (0-255)
-        local ip_part="${ip%%/*}"  # Remove CIDR if present
-        IFS='.' read -ra OCTETS <<< "$ip_part"
-
-        for octet in "${OCTETS[@]}"; do
-            if [[ $octet -gt 255 ]]; then
-                log_error "Invalid IPv4 address: $ip (octet > 255)"
-                return 1
-            fi
-        done
-
-        # Validate CIDR prefix if present
-        if [[ "$ip" == *"/"* ]]; then
-            local prefix="${ip##*/}"
-            if [[ $prefix -lt 0 ]] || [[ $prefix -gt 32 ]]; then
-                log_error "Invalid IPv4 CIDR prefix: /$prefix (must be 0-32)"
-                return 1
-            fi
-        fi
-
-        return 0
-    elif [[ "$ip" =~ $ipv6_regex ]]; then
-        # Basic IPv6 validation (full validation is complex)
-        # Validate CIDR prefix if present
-        if [[ "$ip" == *"/"* ]]; then
-            local prefix="${ip##*/}"
-            if [[ $prefix -lt 0 ]] || [[ $prefix -gt 128 ]]; then
-                log_error "Invalid IPv6 CIDR prefix: /$prefix (must be 0-128)"
-                return 1
-            fi
-        fi
-
-        return 0
-    else
-        log_error "Invalid IP address format: $ip"
-        log_info "Supported formats:"
-        log_info "  - IPv4: 192.168.1.1"
-        log_info "  - IPv4 CIDR: 10.0.0.0/24"
-        log_info "  - IPv6: 2001:db8::1"
-        log_info "  - IPv6 CIDR: 2001:db8::/32"
-        return 1
-    fi
-}
 
 # ============================================================================
 # FUNCTION: init_proxy_whitelist
