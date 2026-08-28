@@ -64,6 +64,9 @@ qr_codes/
 !scripts/*.sh
 !tests/**/*.sh
 
+# Exception: test fixtures and baselines tracked as source
+!tests/shellcheck-baseline.txt
+
 # Backup files
 data/backups/
 *.bak

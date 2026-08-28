@@ -1,0 +1,82 @@
+# .github/workflows/lint-and-test.yml
+# familyTraffic VPN — Lint and unit tests
+#
+# Separate from build-and-push.yml, which only reacts to a VERSION bump and
+# builds the image. This workflow guards the shell sources on every change,
+# with no VERSION bump required.
+#
+# Jobs:
+#   shellcheck — hard gate on error-severity findings, plus a baseline that
+#                may not grow (see tests/lint.sh and .shellcheckrc)
+#   bats       — unit suite; integration and performance suites are excluded
+#                because they need a deployed container
+
+name: Lint and Test
+
+on:
+  push:
+    branches: [master, test]
+    paths:
+      - 'lib/**'
+      - 'scripts/**'
+      - 'install.sh'
+      - 'docker/familytraffic/*.sh'
+      - 'tests/**'
+      - '.shellcheckrc'
+      - '.github/workflows/lint-and-test.yml'
+  pull_request:
+    branches: [master, test]
+    paths:
+      - 'lib/**'
+      - 'scripts/**'
+      - 'install.sh'
+      - 'docker/familytraffic/*.sh'
+      - 'tests/**'
+      - '.shellcheckrc'
+      - '.github/workflows/lint-and-test.yml'
+  workflow_dispatch:
+
+jobs:
+  shellcheck:
+    name: ShellCheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install shellcheck
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y shellcheck
+
+      - name: Report version
+        run: shellcheck --version
+
+      - name: Run gate
+        run: ./tests/lint.sh
+
+  bats:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install bats
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y bats
+
+      - name: Report version
+        run: bats --version
+
+      # Two tests in test_os_detection.bats call skip_if_not_root and are
+      # skipped here; the runner is a non-root user by design.
+      - name: Run unit suite
+        run: bats --print-output-on-failure tests/unit/
+
+      # Parse-only. These suites need a deployed familytraffic container, so
+      # they cannot execute in CI — but a syntax error in them should still
+      # break the build rather than surface months later.
+      - name: Parse integration and performance suites
+        run: |
+          bats --count tests/integration/
+          bats --count tests/performance/
