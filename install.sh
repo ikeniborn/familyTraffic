@@ -179,7 +179,6 @@ source_libraries() {
         "sudoers_info.sh"
         "orchestrator.sh"
         "verification.sh"
-        "security_hardening.sh"
         "certbot_setup.sh"
     )
 
