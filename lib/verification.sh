@@ -656,7 +656,7 @@ display_verification_summary() {
         echo "     docker ps | grep vless"
         echo ""
         echo "  3. Check logs:"
-        echo "     docker-compose -f /opt/familytraffic/docker-compose.yml logs"
+        echo "     docker compose -f /opt/familytraffic/docker-compose.yml logs"
         echo ""
     else
         log_error "VERIFICATION FAILED (${#VERIFICATION_ERRORS[@]} errors)"
@@ -669,7 +669,7 @@ display_verification_summary() {
         echo "Please review the errors above and fix them before proceeding."
         echo ""
         echo "Common fixes:"
-        echo "  1. Container issues: docker-compose -f /opt/familytraffic/docker-compose.yml up -d"
+        echo "  1. Container issues: docker compose -f /opt/familytraffic/docker-compose.yml up -d"
         echo "  2. Permission issues: Run the installation script again as root"
         echo "  3. Network issues: Check UFW Docker forwarding configuration"
         echo ""

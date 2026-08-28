@@ -263,7 +263,7 @@ generate_mtproxy_secret_file() {
 # ============================================================================
 mtproxy_start() {
     if ! docker ps --format '{{.Names}}' | grep -q "^${FAMILYTRAFFIC_CONTAINER}$"; then
-        mtproxy_log_error "Container '${FAMILYTRAFFIC_CONTAINER}' is not running (docker-compose up -d)"
+        mtproxy_log_error "Container '${FAMILYTRAFFIC_CONTAINER}' is not running (docker compose up -d)"
         return 1
     fi
     mtg_supervisord_start
@@ -337,7 +337,7 @@ mtproxy_status() {
     if ! docker ps --format '{{.Names}}' | grep -q "^${FAMILYTRAFFIC_CONTAINER}$"; then
         echo -e "${RED}Status:${NC} container '${FAMILYTRAFFIC_CONTAINER}' is not running"
         echo ""
-        echo -e "${BLUE}To start:${NC} docker-compose up -d"
+        echo -e "${BLUE}To start:${NC} docker compose up -d"
         return 1
     fi
 
