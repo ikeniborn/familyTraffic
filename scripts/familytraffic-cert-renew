@@ -38,6 +38,7 @@ set -euo pipefail
 #==============================================================================
 
 readonly VLESS_DIR="/opt/familytraffic"
+# shellcheck disable=SC2034  # read by lib/logger.sh, which shellcheck cannot follow
 readonly LOG_FILE="$VLESS_DIR/logs/certbot-renew.log"
 readonly METRICS_FILE="$VLESS_DIR/logs/certbot-renew-metrics.json"
 readonly CERT_MANAGER="$VLESS_DIR/lib/certificate_manager.sh"
@@ -47,12 +48,7 @@ readonly RETRY_MAX_ATTEMPTS="${RETRY_MAX_ATTEMPTS:-3}"
 readonly RETRY_INITIAL_DELAY="${RETRY_INITIAL_DELAY:-2}"
 readonly RETRY_MAX_DELAY="${RETRY_MAX_DELAY:-10}"
 
-# Log severity levels
-readonly LOG_DEBUG=0
-readonly LOG_INFO=1
-readonly LOG_WARNING=2
-readonly LOG_ERROR=3
-readonly LOG_CRITICAL=4
+# Severity constants come from lib/logger.sh as LOG_LEVEL_DEBUG and friends.
 
 # Current log level (default INFO unless FAMILYTRAFFIC_RENEW_VERBOSE=1)
 LOG_LEVEL="${LOG_LEVEL:-1}"
@@ -70,40 +66,23 @@ fi
 mkdir -p "$VLESS_DIR/logs" 2>/dev/null
 
 #==============================================================================
-# Enhanced Logging Functions (v5.25)
+# Logging
 #==============================================================================
+# Shared implementation from lib/logger.sh. It honours LOG_LEVEL and appends
+# every line to LOG_FILE, which is what the previous local implementation did;
+# both are already set above.
+#
+# One behaviour changes: the module writes to stdout or stderr by severity,
+# where the old code piped everything through `tee` to stdout. Errors from a
+# deploy hook belong on stderr, and certbot captures both.
 
-log_with_severity() {
-    local severity="$1"
-    local severity_num="$2"
-    local message="$3"
-
-    # Skip if below current log level
-    [[ $severity_num -lt $LOG_LEVEL ]] && return 0
-
-    local timestamp
-    timestamp=$(date '+%Y-%m-%d %H:%M:%S.%3N')
-
-    # Color codes for terminal output
-    local color=""
-    local reset="\e[0m"
-    case "$severity" in
-        DEBUG)    color="\e[36m" ;;      # Cyan
-        INFO)     color="\e[32m" ;;      # Green
-        WARNING)  color="\e[33m" ;;      # Yellow
-        ERROR)    color="\e[31m" ;;      # Red
-        CRITICAL) color="\e[1;31m" ;;    # Bold Red
-    esac
-
-    # Write to log file and terminal
-    echo -e "${color}[$timestamp] [$severity] $message${reset}" | tee -a "$LOG_FILE"
-}
-
-log_debug()    { log_with_severity "DEBUG"    "$LOG_DEBUG"    "$1"; }
-log_info()     { log_with_severity "INFO"     "$LOG_INFO"     "$1"; }
-log_warning()  { log_with_severity "WARNING"  "$LOG_WARNING"  "$1"; }
-log_error()    { log_with_severity "ERROR"    "$LOG_ERROR"    "$1"; }
-log_critical() { log_with_severity "CRITICAL" "$LOG_CRITICAL" "$1"; }
+if [[ -f "${VLESS_DIR}/lib/logger.sh" ]]; then
+    # shellcheck source=/opt/familytraffic/lib/logger.sh
+    source "${VLESS_DIR}/lib/logger.sh"
+else
+    echo "Error: logger.sh not found at ${VLESS_DIR}/lib/logger.sh" >&2
+    exit 1
+fi
 
 #==============================================================================
 # Metrics Tracking (v5.25)
