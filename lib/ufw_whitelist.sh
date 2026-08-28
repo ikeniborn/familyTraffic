@@ -17,6 +17,11 @@
 
 set -euo pipefail
 
+# Shared helpers (validate_ip). Sourced explicitly rather than relying on the
+# CLI having loaded common.sh first; the guard inside makes it idempotent.
+# shellcheck source=lib/common.sh
+source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
+
 # Proxy ports
 readonly SOCKS5_PORT=1080
 readonly HTTP_PORT=8118
@@ -45,61 +50,12 @@ log_ufw_error() {
 }
 
 # ============================================================================
-# IP Validation
+# IP Validation — validate_ip lives in lib/common.sh
 # ============================================================================
-
-#
-# validate_ip()
-#
-# Validate IP address or CIDR notation
-#
-# Arguments:
-#   $1 - IP address or CIDR (e.g., 192.168.1.1 or 10.0.0.0/24)
-#
-# Returns:
-#   0 - Valid IP/CIDR
-#   1 - Invalid
-#
-validate_ip() {
-    local ip="$1"
-
-    # Check for CIDR notation
-    if [[ "$ip" =~ / ]]; then
-        # CIDR format: IP/prefix
-        local addr="${ip%/*}"
-        local prefix="${ip#*/}"
-
-        # Validate prefix length
-        if ! [[ "$prefix" =~ ^[0-9]+$ ]] || [[ "$prefix" -lt 0 ]] || [[ "$prefix" -gt 32 ]]; then
-            return 1
-        fi
-
-        ip="$addr"
-    fi
-
-    # Validate IPv4 address
-    if [[ "$ip" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
-        # Check each octet
-        local IFS='.'
-        local -a octets=($ip)
-        for octet in "${octets[@]}"; do
-            if [[ "$octet" -lt 0 ]] || [[ "$octet" -gt 255 ]]; then
-                return 1
-            fi
-        done
-        return 0
-    fi
-
-    # Validate IPv6 address (basic check)
-    if [[ "$ip" =~ : ]]; then
-        # Basic IPv6 validation (complex regex avoided)
-        if [[ "$ip" =~ ^[0-9a-fA-F:]+$ ]]; then
-            return 0
-        fi
-    fi
-
-    return 1
-}
+# Shared with proxy_whitelist.sh. The copy that used to sit here capped every
+# CIDR prefix at 32 and therefore rejected ordinary IPv6 networks such as
+# 2001:db8::/64 — and because the CLI sources this module last, that copy won.
+# ============================================================================
 
 # ============================================================================
 # UFW Status Check

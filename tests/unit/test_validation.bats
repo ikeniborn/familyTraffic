@@ -6,11 +6,11 @@
 # its current home:
 #   validate_username        lib/user_management.sh (needs common.sh first)
 #   validate_port/_subnet    lib/network_params.sh
-#   validate_ip              lib/proxy_whitelist.sh
+#   validate_ip              lib/common.sh
 #
-# lib/proxy_whitelist.sh is the IPv4+IPv6 implementation. lib/ufw_whitelist.sh
-# declares a second, IPv4-only validate_ip and shadows this one in the CLI —
-# that is tracked as CQ-002 and is deliberately not asserted here.
+# validate_ip was duplicated in proxy_whitelist.sh and ufw_whitelist.sh; the
+# latter capped every CIDR prefix at 32 and, being sourced last by the CLI,
+# rejected ordinary IPv6 networks. The IPv6 cases below cover that regression.
 
 load ../test_helper
 
@@ -143,6 +143,43 @@ teardown() {
 
 @test "validate_ip rejects empty IP" {
     run validate_ip ""
+    [ "$status" -eq 1 ]
+}
+
+@test "validate_ip accepts IPv4 CIDR 10.0.0.0/8" {
+    run validate_ip "10.0.0.0/8"
+    [ "$status" -eq 0 ]
+}
+
+@test "validate_ip rejects IPv4 CIDR prefix above 32" {
+    run validate_ip "10.0.0.0/33"
+    [ "$status" -eq 1 ]
+}
+
+@test "validate_ip accepts plain IPv6" {
+    run validate_ip "2001:db8::1"
+    [ "$status" -eq 0 ]
+}
+
+@test "validate_ip accepts IPv6 loopback" {
+    run validate_ip "::1"
+    [ "$status" -eq 0 ]
+}
+
+# The regression behind CQ-002: a /64 is an ordinary IPv6 network, but the
+# shadowing implementation capped every prefix at 32 and rejected it.
+@test "validate_ip accepts IPv6 CIDR 2001:db8::/64" {
+    run validate_ip "2001:db8::/64"
+    [ "$status" -eq 0 ]
+}
+
+@test "validate_ip rejects IPv6 CIDR prefix above 128" {
+    run validate_ip "2001:db8::/129"
+    [ "$status" -eq 1 ]
+}
+
+@test "validate_ip rejects IPv6-shaped garbage" {
+    run validate_ip "zzzz::1"
     [ "$status" -eq 1 ]
 }
 
