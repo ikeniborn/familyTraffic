@@ -90,22 +90,19 @@ fi
 # ============================================================================
 # Logging Functions
 # ============================================================================
+# Shared implementation from lib/logger.sh. LOG_COMPONENT reproduces the
+# "[mtproxy]" tag this CLI has always prefixed its output with.
+# shellcheck disable=SC2034  # read by lib/logger.sh, which shellcheck cannot follow
+LOG_COMPONENT="mtproxy"
 
-log_info() {
-    echo -e "${BLUE}[mtproxy]${NC} $*"
-}
-
-log_success() {
-    echo -e "${GREEN}[mtproxy ✓]${NC} $*"
-}
-
-log_error() {
-    echo -e "${RED}[mtproxy ✗]${NC} $*" >&2
-}
-
-log_warning() {
-    echo -e "${YELLOW}[mtproxy ⚠]${NC} $*"
-}
+if [[ -f "${LIB_DIR}/logger.sh" ]]; then
+    # shellcheck source=/opt/familytraffic/lib/logger.sh
+    source "${LIB_DIR}/logger.sh"
+else
+    echo -e "${RED}Error: logger.sh not found${NC}" >&2
+    echo "Expected location: ${LIB_DIR}/logger.sh" >&2
+    exit 1
+fi
 
 # ============================================================================
 # Helper: detect current nginx.conf parameters

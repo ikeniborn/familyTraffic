@@ -86,21 +86,10 @@ fi
 # Logging Functions
 # ============================================================================
 
-log_info() {
-    echo -e "${BLUE}[INFO]${NC} $*"
-}
-
-log_success() {
-    echo -e "${GREEN}[✓]${NC} $*"
-}
-
-log_warning() {
-    echo -e "${YELLOW}[⚠]${NC} $*"
-}
-
-log_error() {
-    echo -e "${RED}[✗]${NC} $*" >&2
-}
+# Logging comes from lib/logger.sh — see the note there on why the output shape
+# differs between a terminal and a captured stream.
+# shellcheck source=lib/logger.sh
+source "$(dirname "${BASH_SOURCE[0]}")/logger.sh"
 
 # ============================================================================
 # TASK-6.2: UUID Generation
