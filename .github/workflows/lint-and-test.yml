@@ -40,13 +40,22 @@ jobs:
   shellcheck:
     name: ShellCheck
     runs-on: ubuntu-latest
+    env:
+      SHELLCHECK_VERSION: v0.9.0
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install shellcheck
+      # Pinned deliberately. The gate compares a total finding count against a
+      # recorded baseline, and that number is only meaningful for one
+      # shellcheck release — a newer version adds or retires checks and shifts
+      # the count, turning the gate red for a reason unrelated to the change
+      # under review. Bumping this is a deliberate step: change the version,
+      # run `tests/lint.sh --update-baseline`, and commit both together.
+      - name: Install shellcheck ${{ env.SHELLCHECK_VERSION }}
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y shellcheck
+          curl -fsSL "https://github.com/koalaman/shellcheck/releases/download/${SHELLCHECK_VERSION}/shellcheck-${SHELLCHECK_VERSION}.linux.x86_64.tar.xz" \
+            | tar -xJf - --strip-components=1 -C /tmp "shellcheck-${SHELLCHECK_VERSION}/shellcheck"
+          sudo install -m 0755 /tmp/shellcheck /usr/local/bin/shellcheck
 
       - name: Report version
         run: shellcheck --version
