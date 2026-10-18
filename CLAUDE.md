@@ -21,13 +21,15 @@ bats tests/integration/test_user_workflow.bats
 
 ### Build Docker image
 
+Build context is the repository root — the `COPY` paths in the Dockerfile are repo-relative, and CI passes `context: .`.
+
 ```bash
 # Local build
-docker build -f docker/familytraffic/Dockerfile docker/familytraffic/ -t familytraffic:local
+docker build -f docker/familytraffic/Dockerfile . -t familytraffic:local
 
 # With custom mtg version
 docker build --build-arg MTG_VERSION=2.2.3 --build-arg MTG_ARCH=amd64 \
-  -f docker/familytraffic/Dockerfile docker/familytraffic/
+  -f docker/familytraffic/Dockerfile .
 ```
 
 ### Trigger CI/CD
