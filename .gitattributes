@@ -1,0 +1,2 @@
+# Unified patches require leading context spaces before upstream tabs.
+docker/familytraffic/xray/*.patch -whitespace
