@@ -235,7 +235,47 @@ with open(sys.argv[2],'w') as out:
     out.write('resolve = '+quote(sys.argv[3]+':8118:127.0.0.1')+'\n')
 os.chmod(sys.argv[2],0o600)
 PY
-    [[ "$(curl --config "$SECURITY_WORK/probe.curl" --noproxy '' --silent --fail --max-time 20 --output /dev/null --write-out '%{http_code}' "${FT_SECURITY_TEST_URL:-https://example.com/}")" == 200 ]]
+    [[ "$(curl --config "$SECURITY_WORK/probe.curl" --noproxy '' --silent --fail --retry 10 --retry-connrefused --retry-delay 1 --retry-max-time 20 --max-time 20 --output /dev/null --write-out '%{http_code}' "${FT_SECURITY_TEST_URL:-https://example.com/}")" == 200 ]] || return 1
+    security_verify_auth_event
+}
+
+security_verify_auth_event() {
+    python3 - "$SECURITY_WORK" "$SECURITY_LOG" "$SECURITY_XRAY" "${FT_SECURITY_TEST_URL:-https://example.com/}" <<'PY'
+import datetime,json,os,pathlib,re,subprocess,sys,time,uuid
+work,journal,config,target=sys.argv[1:]
+path=pathlib.Path(journal)
+before=path.stat()
+accounts={a['user'] for i in json.load(open(config))['inbounds'] if i['tag']=='http-proxy' for a in i['settings']['accounts']}
+user='ft-probe-'+uuid.uuid4().hex
+while user in accounts:user='ft-probe-'+uuid.uuid4().hex
+text=(pathlib.Path(work)/'probe.curl').read_text()
+text=re.sub(r'^proxy-user = .*$',lambda _: 'proxy-user = '+json.dumps(user+':'+uuid.uuid4().hex),text,flags=re.M)
+probe=pathlib.Path(work)/'failure.curl'
+probe.write_text(text);os.chmod(probe,0o600)
+response=subprocess.run(['curl','--config',str(probe),'--noproxy','','--interface','127.0.0.2','--silent','--max-time','5','--output','/dev/null','--write-out','%{http_connect}',target],capture_output=True,text=True)
+if response.stdout!='407':raise SystemExit('Controlled authentication rejection failed')
+deadline=time.monotonic()+2
+while True:
+    current=path.stat()
+    with path.open('rb') as log:
+        if current.st_ino==before.st_ino:log.seek(before.st_size)
+        lines=log.read().splitlines()
+    for line in lines:
+        if re.fullmatch(rb'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z FT_AUTH_FAILURE protocol=http src=127\.0\.0\.2',line):
+            timestamp=datetime.datetime.strptime(line[:20].decode(),'%Y-%m-%dT%H:%M:%SZ').replace(tzinfo=datetime.timezone.utc).timestamp()
+            if abs(time.time()-timestamp)<=10:raise SystemExit(0)
+    if time.monotonic()>=deadline:raise SystemExit('Controlled authentication rejection produced no fresh journal event')
+    time.sleep(.05)
+PY
+}
+
+security_validate_journal_mounts() {
+    python3 -c '
+import json,os,sys
+mounts=json.loads(sys.argv[1]);expected=os.path.realpath(sys.argv[2])
+cover=[m for m in mounts if m["Destination"]=="/var/log/xray" or m["Destination"].startswith("/var/log/xray/")]
+sys.exit(0 if len(cover)==1 and cover[0]["Destination"]=="/var/log/xray" and cover[0].get("Type")=="bind" and cover[0].get("RW") is True and os.path.realpath(cover[0]["Source"])==expected else 1)
+' "$1" "$2"
 }
 
 security_reconcile_policy() {
@@ -249,7 +289,7 @@ security_reconcile_policy() {
 
 security_inspect() {
     security_paths
-    local notls ports expected_image actual_image active_xray active_nginx staged_nginx changes
+    local notls ports expected_image actual_image active_xray active_nginx staged_nginx changes mounts
     notls=$(resolve_proxy_notls "${PROXY_NOTLS_ENABLED-}" "$SECURITY_ROOT/.env") || return 1
     ports=$(proxy_auth_ports "$notls") || return 1
     validate_proxy_auth_config "$SECURITY_XRAY" || return 1
@@ -259,6 +299,8 @@ security_inspect() {
         .listen == "127.0.0.1" and .streamSettings.sockopt.acceptProxyProtocol == true] |
         length == 2 and all' "$SECURITY_XRAY" >/dev/null || return 1
     [[ -f "$SECURITY_LOG" && ! -L "$SECURITY_LOG" && "$(stat -c %a "$SECURITY_LOG")" == 600 ]] || return 1
+    mounts=$(docker inspect --format '{{json .Mounts}}' familytraffic) || return 1
+    security_validate_journal_mounts "$mounts" "$(dirname "$SECURITY_LOG")" || return 1
     [[ "$(docker exec familytraffic cat /etc/familytraffic/auth-journal-capability)" == ft-auth-journal-v1 ]] || return 1
     if [[ -f "$SECURITY_OVERRIDE" ]]; then
         expected_image=$(sed -nE 's/^[[:space:]]+image: (sha256:[a-f0-9]{64})$/\1/p' "$SECURITY_OVERRIDE")

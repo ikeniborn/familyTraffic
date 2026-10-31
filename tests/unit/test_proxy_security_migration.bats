@@ -265,3 +265,44 @@ MOCK
     [[ "$output" != *'proxy_security.sh: No such file or directory'* ]]
     [[ "$output" != *'fail2ban_setup.sh: No such file or directory'* ]]
 }
+
+@test "journal mount preflight rejects missing misdirected read-only and shadowed mounts" {
+    source "$PROJECT_ROOT/scripts/familytraffic-security"
+    run security_validate_journal_mounts '[]' /opt/familytraffic/logs/xray
+    [ "$status" -ne 0 ]
+    for mounts in '[{"Type":"bind","Source":"/wrong","Destination":"/var/log/xray","RW":true}]' '[{"Type":"bind","Source":"/opt/familytraffic/logs/xray","Destination":"/var/log/xray","RW":false}]' '[{"Type":"bind","Source":"/opt/familytraffic/logs/xray","Destination":"/var/log/xray","RW":true},{"Type":"bind","Source":"/wrong/auth.log","Destination":"/var/log/xray/auth.log","RW":true}]'; do
+        run security_validate_journal_mounts "$mounts" /opt/familytraffic/logs/xray
+        [ "$status" -ne 0 ]
+    done
+    run security_validate_journal_mounts '[{"Type":"bind","Source":"/opt/familytraffic/logs/xray","Destination":"/var/log/xray","RW":true}]' /opt/familytraffic/logs/xray
+    [ "$status" -eq 0 ]
+}
+
+@test "controlled rejection requires a fresh event and does not expose account secrets" {
+    source "$PROJECT_ROOT/scripts/familytraffic-security"
+    SECURITY_WORK="$BATS_TEST_TMPDIR/work"
+    SECURITY_LOG="$BATS_TEST_TMPDIR/auth.log"
+    SECURITY_XRAY="$BATS_TEST_TMPDIR/xray.json"
+    mkdir -p "$SECURITY_WORK" "$BATS_TEST_TMPDIR/bin"
+    printf '%s\n' '{"inbounds":[{"tag":"http-proxy","settings":{"accounts":[{"user":"fixture-user","pass":"secret-fixture-value"}]}}]}' > "$SECURITY_XRAY"
+    printf '%s\n' 'proxy = "https://proxy.lab:8118"' 'proxy-user = "fixture-user:secret-fixture-value"' > "$SECURITY_WORK/probe.curl"
+    : > "$SECURITY_LOG"
+    chmod 600 "$SECURITY_LOG"
+    export TEST_EVENT_LOG="$SECURITY_LOG"
+    cat > "$BATS_TEST_TMPDIR/bin/curl" <<'MOCK'
+#!/bin/bash
+if [[ "${TEST_WRITE_EVENT:-false}" == true ]]; then
+    printf '%s FT_AUTH_FAILURE protocol=http src=127.0.0.2\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$TEST_EVENT_LOG"
+fi
+printf 407
+MOCK
+    chmod +x "$BATS_TEST_TMPDIR/bin/curl"
+    export PATH="$BATS_TEST_TMPDIR/bin:$PATH"
+    run security_verify_auth_event
+    [ "$status" -ne 0 ]
+    [[ "$output" != *secret-fixture-value* ]]
+    export TEST_WRITE_EVENT=true
+    run security_verify_auth_event
+    [ "$status" -eq 0 ]
+    [[ "$output" != *secret-fixture-value* ]]
+}
