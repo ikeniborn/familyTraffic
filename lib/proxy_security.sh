@@ -78,3 +78,57 @@ stage_proxy_security_config() {
     cat "$staged" > "$output" || { rm -f "$staged"; return 1; }
     rm -f "$staged"
 }
+
+proxy_auth_ports() {
+    case "$1" in
+        true) printf '%s\n' '1080,1081,8118,8119' ;;
+        false) printf '%s\n' '1080,8118' ;;
+        *) return 1 ;;
+    esac
+}
+
+# Own only exact project-generated global proxy rules. Preflight every port first.
+_proxy_firewall_changes() {
+    local ports status_text port line normalized rule_port action direction origin comment
+    ports=$(proxy_auth_ports "$1") || return 1
+    status_text=$(LC_ALL=C ufw status numbered) || return 1
+    [[ "$status_text" == *'Status: active'* ]] || { echo 'UFW must be active' >&2; return 1; }
+    local -a changes=()
+    local managed found
+    for port in ${ports//,/ }; do
+        managed=false found=false
+        while IFS= read -r line; do
+            [[ "$line" =~ (^|[^0-9])${port}([^0-9]|$) ]] || continue
+            normalized=$(printf '%s\n' "$line" | sed -E 's/^\[[[:space:]]*[0-9]+\][[:space:]]*//; s/ \(v6\)//g')
+            read -r rule_port action direction origin comment <<< "$normalized"
+            if [[ "$rule_port" != "$port/tcp" || "$direction" != IN || "$origin" != Anywhere ||
+                  ( "$action" != ALLOW && "$action" != LIMIT ) ]]; then
+                echo "Conflicting UFW rule for proxy port $port; preserve operator policy" >&2
+                return 1
+            fi
+            case "$comment" in
+                '# FamilyTraffic proxy auth'|'# VLESS SOCKS5 Proxy (rate-limited)'|'# VLESS HTTP Proxy (rate-limited)'|'# VLESS SOCKS5 Proxy no-TLS (rate-limited)'|'# VLESS HTTP Proxy no-TLS (rate-limited)') ;;
+                *) echo "Unrecognized UFW rule for proxy port $port" >&2; return 1 ;;
+            esac
+            found=true
+            [[ "$action" == LIMIT ]] && managed=true
+        done <<< "$status_text"
+        if [[ "$found" == false || "$managed" == true ]]; then changes+=("$port"); fi
+    done
+    if ((${#changes[@]})); then printf '%s\n' "${changes[@]}"; fi
+}
+
+validate_proxy_firewall() {
+    _proxy_firewall_changes "$1" >/dev/null
+}
+
+reconcile_proxy_firewall() {
+    local changes port
+    changes=$(_proxy_firewall_changes "$1") || return 1
+    [[ -n "$changes" ]] || return 0
+    while IFS= read -r port; do
+        # UFW replaces an exact global LIMIT match with ALLOW for IPv4 and IPv6.
+        ufw allow "$port/tcp" comment 'FamilyTraffic proxy auth' || return 1
+    done <<< "$changes"
+    ufw reload || return 1
+}

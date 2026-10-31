@@ -844,79 +844,10 @@ configure_proxy_firewall_rules() {
         return 0
     fi
 
-    echo -e "${CYAN}Configuring firewall for public proxy...${NC}"
-
-    # Ensure UFW is active
-    if ! ufw status | grep -q "Status: active"; then
-        echo -e "${RED}UFW is not active${NC}" >&2
-        return 1
-    fi
-
-    # Check if SOCKS5 port rule already exists
-    if ! ufw status numbered | grep -q "1080/tcp"; then
-        echo "  Adding SOCKS5 port (1080/tcp) with rate limiting..."
-        if ! ufw limit 1080/tcp comment 'VLESS SOCKS5 Proxy (rate-limited)'; then
-            echo -e "${RED}Failed to add SOCKS5 firewall rule${NC}" >&2
-            return 1
-        fi
-        echo -e "${GREEN}  ✓ SOCKS5 port opened with rate limiting${NC}"
-    else
-        echo "  ✓ SOCKS5 port already open"
-    fi
-
-    # Check if HTTP port rule already exists
-    if ! ufw status numbered | grep -q "8118/tcp"; then
-        echo "  Adding HTTP port (8118/tcp) with rate limiting..."
-        if ! ufw limit 8118/tcp comment 'VLESS HTTP Proxy (rate-limited)'; then
-            echo -e "${RED}Failed to add HTTP firewall rule${NC}" >&2
-            return 1
-        fi
-        echo -e "${GREEN}  ✓ HTTP port opened with rate limiting${NC}"
-    else
-        echo "  ✓ HTTP port already open"
-    fi
-
     PROXY_NOTLS_ENABLED=$(resolve_proxy_notls "${PROXY_NOTLS_ENABLED-}" "${VLESS_DIR}/.env") || return 1
     export PROXY_NOTLS_ENABLED
+    reconcile_proxy_firewall "$PROXY_NOTLS_ENABLED"
 
-    # No-TLS proxy ports (v5.35)
-    if [[ "${PROXY_NOTLS_ENABLED:-false}" == "true" ]]; then
-        if ! ufw status numbered | grep -q "1081/tcp"; then
-            echo "  Adding SOCKS5 no-TLS port (1081/tcp) with rate limiting..."
-            if ! ufw limit 1081/tcp comment 'VLESS SOCKS5 Proxy no-TLS (rate-limited)'; then
-                echo -e "${RED}Failed to add SOCKS5 no-TLS firewall rule${NC}" >&2
-                return 1
-            fi
-            echo -e "${GREEN}  ✓ SOCKS5 no-TLS port opened with rate limiting${NC}"
-        else
-            echo "  ✓ SOCKS5 no-TLS port already open"
-        fi
-
-        if ! ufw status numbered | grep -q "8119/tcp"; then
-            echo "  Adding HTTP no-TLS port (8119/tcp) with rate limiting..."
-            if ! ufw limit 8119/tcp comment 'VLESS HTTP Proxy no-TLS (rate-limited)'; then
-                echo -e "${RED}Failed to add HTTP no-TLS firewall rule${NC}" >&2
-                return 1
-            fi
-            echo -e "${GREEN}  ✓ HTTP no-TLS port opened with rate limiting${NC}"
-        else
-            echo "  ✓ HTTP no-TLS port already open"
-        fi
-    fi
-
-    # Reload UFW to apply rules
-    echo "  Reloading UFW..."
-    if ! ufw reload &>/dev/null; then
-        echo -e "${YELLOW}Warning: Failed to reload UFW${NC}"
-    fi
-
-    echo -e "${GREEN}✓ Firewall configured for public proxy${NC}"
-    echo ""
-    echo "Active proxy ports:"
-    ufw status numbered | grep -E "(1080|1081|8118|8119)/tcp" || true
-    echo ""
-
-    return 0
 }
 
 # =============================================================================
