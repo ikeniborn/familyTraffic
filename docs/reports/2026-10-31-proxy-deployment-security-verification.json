@@ -1,0 +1,86 @@
+{
+  "application_regressions": {
+    "backend": {
+      "errors": 108,
+      "exit_status": 1,
+      "failed": 9,
+      "finding": "Duplicate fixture telegram ID and excess user counts; root attribution unresolved. No application source changes.",
+      "passed": 365,
+      "skipped": 7
+    },
+    "frontend": {
+      "baseline_confirmed": "20 ArticleSelect constructor-mock failures reproduce on archived origin/test with the same dependencies. Other six failures lack baseline confirmation.",
+      "exit_status": 1,
+      "failed": 26,
+      "passed": 888,
+      "skipped": 98
+    }
+  },
+  "closure_mapping": {
+    "O1": "No-TLS generation/installer tests and repeated-state fixtures",
+    "O2": "Eight requests per proxy port and actual UFW/fail2ban lab",
+    "O3": "Four proxy transports and VLESS lab",
+    "O4": "Client attribution, spoof/injection, dynamic-IP and ban-isolation lab",
+    "O5": "Exact live-filter/mount checks and controlled journal event",
+    "O6": "Companion FamilyBudget lifecycle and unsafe-override rejection",
+    "O7": "Actual paired image/config migration and exact policy rollback; companion Budget fresh/upgrade/repeat lifecycle"
+  },
+  "durable_lifecycle": "completion-pending",
+  "implementation_head": "1a46e28876fe3d700e164639f14812824bdbbfa6",
+  "independent_integration_review": "No remaining blocking findings in changed source after scoped corrections.",
+  "repository": "familyTraffic",
+  "result_check": {
+    "plan_hash": "82ee21c6ff6126b1",
+    "source": "plan",
+    "verdict": "OK"
+  },
+  "scope": "Approved installation and deployment security changes; no host rollout of the new mechanism.",
+  "security_verification": {
+    "lint": {
+      "command": "bash tests/lint.sh",
+      "errors": 0,
+      "exit_status": 0,
+      "findings": 191
+    },
+    "network_lab": {
+      "cases_passed": 10,
+      "exit_status": 0,
+      "results_sha256": "6b5b3b82fd641d4c62da484f00a2fe6f65be6578247aa04eb201ba132c8d36f1",
+      "source_artifact": "ft-security-1793473364-3377069"
+    },
+    "transaction_lab": {
+      "application_image": "sha256:fedff6c03d1dfe5ec9d4f67cd9fb582c61c47b8cc483a617870bcbc7b360f9ab",
+      "checks": [
+        "actual compatible image/configuration switch; users and bind inodes preserved",
+        "post-policy injected failure restored exact prior pair/image/managed policy; real authenticated traffic recovered",
+        "incompatible local immutable image refused without changing deployment"
+      ],
+      "daemon_base": "fb-publication-dind-base:29",
+      "exit_status": 0,
+      "source_sha256": {
+        "lib/fail2ban_setup.sh": "7422a7fef44f7f2c25ba91410778740bb8687692a8952399e2c8d6c83d44289b",
+        "lib/nginx_stream_generator.sh": "72809871876092ce1a64ca0eedc9a770ede814d61f3e7471cfc781ea29a96223",
+        "lib/proxy_security.sh": "aa0cb3d01b4fce487cafc1a76c5a81840dc6b373233c3e1ce47e961ca4254914",
+        "scripts/familytraffic-security": "0fc32db82360a5114fd2520fbe1a30334abe57ddbc11188b8d13443a6675734d",
+        "tests/security_lab/node.Dockerfile": "4f40c4f1bf2c349c3c018b5e08d05e2e1740e0f155d56d71cb5dab2ee6a08ba6",
+        "tests/security_lab/transaction_lab.py": "0b017affe3319c167244a1be53bbf794f01f52b3deab7b4e34ba30fbafa8bd24"
+      }
+    },
+    "unit": {
+      "command": "bats --print-output-on-failure tests/unit/",
+      "exit_status": 0,
+      "passed": 108,
+      "skipped": 2
+    },
+    "upstream_go": {
+      "builder_go": "1.23.4",
+      "commit": "98a72b6fb49bcc403c4cae1ff529b9def43e6ad8",
+      "focused_race_exit_status": 0,
+      "full_suite_exit_status": 0,
+      "version": "24.11.30"
+    }
+  },
+  "shared_application_regression_status": "failed",
+  "topic": "proxy-deployment-security",
+  "wiki_delivery": "unavailable"
+}
