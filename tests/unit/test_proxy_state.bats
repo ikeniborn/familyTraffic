@@ -110,3 +110,36 @@ setup() {
     generate_nginx_config_wrapper
     grep -q 'listen 1081;' "$VLESS_DIR/config/nginx/nginx.conf"
 }
+
+@test "installer wrapper repeat preserves existing Tier2 cloak and bind inode" {
+    source "$PROJECT_ROOT/lib/nginx_stream_generator.sh"
+    source <(sed -n '/^generate_nginx_config_wrapper()/,/^}/p' "$PROJECT_ROOT/lib/orchestrator.sh")
+    export VLESS_DIR="$BATS_TEST_TMPDIR/install" CERT_DOMAIN=proxy.example.com PROXY_NOTLS_ENABLED=true
+    CYAN='' NC='' RED='' YELLOW='' GREEN=''
+    mkdir -p "$VLESS_DIR/config/nginx"
+    local conf="$VLESS_DIR/config/nginx/nginx.conf" inode
+    generate_nginx_config proxy.example.com true ws.example.com xhttp.example.com grpc.example.com true true > "$conf"
+    sed -n '/^http {/,$p' "$conf" > "$BATS_TEST_TMPDIR/http-before"
+    inode=$(stat -c %i "$conf")
+    generate_nginx_config_wrapper
+    sed -n '/^http {/,$p' "$conf" > "$BATS_TEST_TMPDIR/http-after"
+    cmp "$BATS_TEST_TMPDIR/http-before" "$BATS_TEST_TMPDIR/http-after"
+    [ "$(stat -c %i "$conf")" = "$inode" ]
+}
+
+@test "client export retains explicit mode without persisted settings" {
+    source <(sed -n '/^export_all_proxy_configs()/,/^}/p' "$PROJECT_ROOT/lib/user_management.sh")
+    SCRIPT_DIR="$PROJECT_ROOT/lib"
+    ENV_FILE="$state" CLIENTS_DIR="$BATS_TEST_TMPDIR/clients"
+    PROXY_NOTLS_ENABLED=true
+    log_info() { :; }
+    log_success() { :; }
+    export_socks5_config() { [ "$PROXY_NOTLS_ENABLED" = true ]; }
+    export_http_config() { [ "$PROXY_NOTLS_ENABLED" = true ]; }
+    export_vscode_config() { :; }
+    export_docker_config() { :; }
+    export_bash_config() { :; }
+    export_git_config() { :; }
+    export_all_proxy_configs test fixture-password
+    [ "$PROXY_NOTLS_ENABLED" = true ]
+}

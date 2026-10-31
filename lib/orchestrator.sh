@@ -1156,11 +1156,24 @@ generate_nginx_config_wrapper() {
         export FT_DEBUG="${_ft_debug_val:-${FT_DEBUG:-false}}"
     fi
 
-    # Generate nginx.conf (Phase 0: no Tier 2 subdomains yet; they are added by transport_manager.sh)
-    if ! generate_nginx_config "${cert_domain}" "false" "" "" "" "false" "${enable_notls}" > "${VLESS_DIR}/config/nginx/nginx.conf"; then
+    # Retain generated transport choices when repeating configuration generation.
+    local nginx_conf="${VLESS_DIR}/config/nginx/nginx.conf"
+    local enable_tier2=false enable_cloak=false ws_sub="" xhttp_sub="" grpc_sub=""
+    if [[ -f "$nginx_conf" ]]; then
+        ws_sub=$(awk '/# WebSocket Tier 2/ {print $1}' "$nginx_conf")
+        xhttp_sub=$(awk '/# XHTTP Tier 2/ {print $1}' "$nginx_conf")
+        grpc_sub=$(awk '/# gRPC Tier 2/ {print $1}' "$nginx_conf")
+        [[ -n "$ws_sub$xhttp_sub$grpc_sub" ]] && enable_tier2=true
+        if grep -q 'listen 4443' "$nginx_conf"; then enable_cloak=true; fi
+    fi
+    local tmp_conf="${nginx_conf}.tmp"
+    if ! generate_nginx_config "${cert_domain}" "$enable_tier2" "$ws_sub" "$xhttp_sub" "$grpc_sub" "$enable_cloak" "${enable_notls}" > "$tmp_conf"; then
+        rm -f "$tmp_conf"
         echo -e "${RED}Failed to generate Nginx configuration${NC}" >&2
         return 1
     fi
+    cat "$tmp_conf" > "$nginx_conf" || { rm -f "$tmp_conf"; return 1; }
+    rm -f "$tmp_conf"
 
     echo "  ✓ Nginx config: ${VLESS_DIR}/config/nginx/nginx.conf"
     echo "  ✓ Stream ports: 443 (SNI ssl_preread), 1080 (SOCKS5 TLS), 8118 (HTTP TLS)"
