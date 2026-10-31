@@ -30,10 +30,11 @@ on:
     paths:
       - "VERSION"
   pull_request:
-    branches:
-      - test
+    branches: [master, test]
     paths:
       - "VERSION"
+      - "docker/familytraffic/**"
+      - ".github/workflows/build-and-push.yml"
   workflow_dispatch:
 
 env:
@@ -45,6 +46,7 @@ jobs:
   # Job 1: Build image and push :test + :sha-<short> to GHCR
   # ============================================================
   build-and-push:
+    if: github.event_name != 'pull_request'
     name: Build & Push [:test]
     runs-on: ubuntu-latest
     permissions:
@@ -116,7 +118,7 @@ jobs:
     name: Notify Telegram
     runs-on: ubuntu-latest
     needs: [build-and-push]
-    if: always()
+    if: always() && github.event_name != 'pull_request'
 
     steps:
       - name: Send Telegram notification
@@ -164,3 +166,19 @@ jobs:
             --data-urlencode "text=${TEXT}" \
             -o /dev/null \
             -w "Telegram API: %{http_code}\n"
+
+  build-pr:
+    name: Build and inspect reviewed image
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build without publishing
+        run: docker build -f docker/familytraffic/Dockerfile -t familytraffic:proxy-security .
+      - name: Verify capability and Xray configuration
+        run: |
+          test "$(docker run --rm --entrypoint cat familytraffic:proxy-security /etc/familytraffic/auth-journal-capability)" = ft-auth-journal-v1
+          printf '%s\n' '{"inbounds":[],"outbounds":[{"protocol":"freedom"}]}' > /tmp/xray-check.json
+          docker run --rm --entrypoint /usr/bin/xray -v /tmp/xray-check.json:/tmp/xray-check.json:ro familytraffic:proxy-security run -test -config /tmp/xray-check.json

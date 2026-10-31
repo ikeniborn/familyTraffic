@@ -41,6 +41,7 @@
 # ============================================================================
 
 set -euo pipefail
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/proxy_security.sh"
 
 # ============================================================================
 # Global Variables
@@ -728,6 +729,13 @@ validate_mandatory_tls() {
     # Check 4: Xray inbounds listen on 127.0.0.1 (v5.33 single-container: Nginx and Xray share localhost)
     log_info "  [4/5] Checking Xray proxy inbounds (should be 127.0.0.1)..."
     local config_file="${INSTALL_ROOT}/config/xray_config.json"
+    if ! validate_proxy_auth_config "$config_file" || ! jq -e '
+        [.inbounds[] | select(.tag == "socks5-proxy" or .tag == "http-proxy") |
+         .streamSettings.sockopt.acceptProxyProtocol == true] | length == 2 and all
+    ' "$config_file" >/dev/null 2>&1; then
+        log_error "    Proxy authentication or trusted source forwarding is not configured"
+        validation_failed=1
+    fi
     local socks5_listen
     local http_listen
     socks5_listen=$(jq -r '.inbounds[] | select(.tag=="socks5-proxy") | .listen' "$config_file" 2>/dev/null)

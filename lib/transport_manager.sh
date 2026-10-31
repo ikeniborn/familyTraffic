@@ -188,14 +188,9 @@ _regenerate_nginx_config() {
         enable_cloak="true"
     fi
 
-    # Auto-detect no-TLS from .env or existing nginx.conf
-    local enable_notls="false"
+    local enable_notls
     local env_file="${VLESS_DIR:-/opt/familytraffic}/.env"
-    if [[ -f "$env_file" ]] && grep -q '^PROXY_NOTLS_ENABLED=true' "$env_file" 2>/dev/null; then
-        enable_notls="true"
-    elif [[ -f "${nginx_conf_dir}/nginx.conf" ]] && grep -q 'listen 1081' "${nginx_conf_dir}/nginx.conf" 2>/dev/null; then
-        enable_notls="true"
-    fi
+    enable_notls=$(resolve_proxy_notls "${PROXY_NOTLS_ENABLED-}" "$env_file") || return 1
 
     # Read debug mode from .env and export for generate_nginx_config()
     if [[ -f "$env_file" ]]; then

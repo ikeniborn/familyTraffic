@@ -21,6 +21,8 @@ on:
       - 'scripts/**'
       - 'install.sh'
       - 'docker/familytraffic/*.sh'
+      - 'docker/familytraffic/Dockerfile'
+      - 'docker/familytraffic/xray/**'
       - 'tests/**'
       - '.shellcheckrc'
       - '.github/workflows/lint-and-test.yml'
@@ -31,6 +33,8 @@ on:
       - 'scripts/**'
       - 'install.sh'
       - 'docker/familytraffic/*.sh'
+      - 'docker/familytraffic/Dockerfile'
+      - 'docker/familytraffic/xray/**'
       - 'tests/**'
       - '.shellcheckrc'
       - '.github/workflows/lint-and-test.yml'
@@ -89,3 +93,34 @@ jobs:
         run: |
           bats --count tests/integration/
           bats --count tests/performance/
+
+  xray:
+    name: Patched Xray upstream tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Focused journal and authentication tests
+        run: bash docker/familytraffic/xray/test.sh focused
+      - name: Complete upstream suite
+        run: bash docker/familytraffic/xray/test.sh all
+
+  security-lab:
+    name: Isolated proxy security acceptance
+    needs: xray
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install migration test dependency
+        run: sudo apt-get update && sudo apt-get install -y bats
+      - name: Build reviewed application image
+        run: docker build -f docker/familytraffic/Dockerfile -t familytraffic:proxy-security .
+      - name: Run real proxy firewall and authentication scenarios
+        run: bash tests/security_lab/run.sh --image familytraffic:proxy-security
+      - name: Preserve redacted acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: proxy-security-evidence
+          path: tests/security_lab/artifacts/
+          if-no-files-found: error

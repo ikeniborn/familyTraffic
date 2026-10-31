@@ -1,0 +1,413 @@
+#!/usr/bin/env bash
+# Coordinate the patched image, trusted receivers, and managed host policy.
+
+security_reset_transaction() {
+    SECURITY_WORK=''
+    SECURITY_BACKUP_READY=false
+    SECURITY_STOPPED=false
+    SECURITY_POLICY_STARTED=false
+    SECURITY_LOG_MISSING=false
+    SECURITY_KEEP_BACKUP=false
+    SECURITY_BACKUP_PATHS=()
+}
+
+# Internal cleanup paths and lifecycle flags must never come from the environment.
+security_reset_transaction
+
+security_paths() {
+    local script
+    script=$(readlink -f "${BASH_SOURCE[0]}") || return 1
+    SECURITY_ROOT="${FT_SECURITY_ROOT:-/opt/familytraffic}"
+    SECURITY_LIB="${FT_SECURITY_LIB_DIR:-$(cd "$(dirname "$script")/../lib" && pwd)}"
+    SECURITY_XRAY="$SECURITY_ROOT/config/xray_config.json"
+    SECURITY_NGINX="$SECURITY_ROOT/config/nginx/nginx.conf"
+    SECURITY_USERS="$SECURITY_ROOT/data/users.json"
+    SECURITY_OVERRIDE="$SECURITY_ROOT/docker-compose.security.yml"
+    SECURITY_LOG="${FT_PROXY_AUTH_LOG:-$SECURITY_ROOT/logs/xray/auth.log}"
+    export FT_PROXY_AUTH_LOG="$SECURITY_LOG"
+    source "$SECURITY_LIB/proxy_security.sh"
+    source "$SECURITY_LIB/fail2ban_setup.sh"
+}
+
+security_stage_nginx() {
+    python3 - "$1" "$2" "$3" <<'PY'
+import pathlib,re,sys
+source,target,notls=sys.argv[1:]
+text=pathlib.Path(source).read_text()
+if re.search(r'listen\s+[^;]*\bproxy_protocol\b',text):
+    raise SystemExit('Public incoming PROXY protocol requires operator review')
+pattern=re.compile(r'^    server \{\n.*?^    \}',re.M|re.S)
+seen=set()
+def update(match):
+    block=match.group()
+    remote=re.search(r'proxy_pass\s+127\.0\.0\.1:(10800|18118)\s*;',block)
+    if not remote:return block
+    listen=re.findall(r'\blisten\s+(\d+)(?:\s+ssl)?\s*;',block)
+    if len(listen)!=1 or listen[0] not in ('1080','1081','8118','8119'):
+        raise SystemExit('Ambiguous proxy listener requires operator review')
+    port=listen[0]
+    if port in seen:raise SystemExit('Duplicate proxy listener')
+    seen.add(port)
+    expected='10800' if port in ('1080','1081') else '18118'
+    if remote[1]!=expected:raise SystemExit('Unexpected proxy target')
+    directives=re.findall(r'\bproxy_protocol\s+([^;]+);',block)
+    if directives and directives!=['on']:raise SystemExit('Conflicting PROXY directive')
+    if port in ('1081','8119') and notls=='false':return ''
+    if not directives:
+        block=block[:remote.end()]+ '\n        proxy_protocol on;' +block[remote.end():]
+    return block
+text=pattern.sub(update,text)
+if not {'1080','8118'}<=seen:raise SystemExit('Require recognized TLS proxy listeners')
+if notls=='true':
+    extra=''
+    for port,remote in [('1081','10800'),('8119','18118')]:
+        if port not in seen:
+            extra+=f'\n    server {{\n        listen {port};\n        proxy_pass 127.0.0.1:{remote};\n        proxy_protocol on;\n        proxy_connect_timeout 10s;\n        proxy_timeout 300s;\n    }}\n'
+    # Insert before the top-level stream block ends. Generated proxy blocks are flat.
+    start=re.search(r'^stream\s*\{',text,re.M)
+    if not start:raise SystemExit('Missing stream block')
+    depth=1;end=start.end()
+    for end in range(start.end(),len(text)):
+        if text[end]=='{':depth+=1
+        elif text[end]=='}':
+            depth-=1
+            if depth==0:break
+    if depth:raise SystemExit('Unclosed stream block')
+    text=text[:end]+extra+text[end:]
+pathlib.Path(target).write_text(text)
+PY
+}
+
+security_check() {
+    security_inspect
+}
+
+security_reconcile() {
+    local image="$1"
+    security_reset_transaction
+    if [[ ! "$image" =~ ^sha256:[a-f0-9]{64}$ && ! "$image" =~ ^[^[:space:]@]+@sha256:[a-f0-9]{64}$ ]]; then
+        echo 'Require a locally available immutable image ID or repository digest' >&2
+        return 1
+    fi
+    if ! security_preflight "$image"; then security_cleanup; return 1; fi
+    if ! security_backup; then security_cleanup; return 1; fi
+    SECURITY_BACKUP_READY=true
+    if ! security_apply || ! security_verify_traffic || ! security_reconcile_policy || ! security_inspect; then
+        echo 'Security deployment failed; restoring the previous compatible configuration and image' >&2
+        security_rollback || echo 'Rollback failed; manual recovery is required' >&2
+        echo 'Previous protection may be degraded. Deployment remains failed.' >&2
+        security_cleanup
+        return 1
+    fi
+    security_cleanup
+}
+
+security_image_capability() {
+    local image="$1" marker
+    marker=$(docker run --rm --pull never --network none --entrypoint cat "$image" /etc/familytraffic/auth-journal-capability) || return 1
+    [[ "$marker" == ft-auth-journal-v1 ]]
+}
+
+security_user_fingerprint() {
+    sha256sum "$SECURITY_USERS" | cut -d' ' -f1
+}
+
+security_preflight() {
+    security_paths
+    local command image="$1"
+    for command in docker jq python3 curl ufw fail2ban-client sha256sum; do
+        command -v "$command" >/dev/null || { echo "Missing required command: $command" >&2; return 1; }
+    done
+    for command in "$SECURITY_XRAY" "$SECURITY_NGINX" "$SECURITY_USERS" "$SECURITY_ROOT/docker-compose.yml" "$SECURITY_ROOT/.env"; do
+        [[ -f "$command" && ! -L "$command" ]] || { echo "Missing or symlinked deployment file: $command" >&2; return 1; }
+    done
+    SECURITY_IMAGE=$(docker image inspect --format '{{.Id}}' "$image") || return 1
+    [[ "$SECURITY_IMAGE" =~ ^sha256:[a-f0-9]{64}$ ]] || return 1
+    if SECURITY_OLD_IMAGE=$(docker inspect --format '{{.Image}}' familytraffic 2>/dev/null); then
+        SECURITY_EXISTED=true
+    else
+        SECURITY_EXISTED=false
+        SECURITY_OLD_IMAGE="$SECURITY_IMAGE"
+    fi
+    [[ "$SECURITY_OLD_IMAGE" =~ ^sha256:[a-f0-9]{64}$ ]] || return 1
+    SECURITY_NOTLS=$(resolve_proxy_notls "${PROXY_NOTLS_ENABLED-}" "$SECURITY_ROOT/.env") || return 1
+    SECURITY_PORTS=$(proxy_auth_ports "$SECURITY_NOTLS") || return 1
+    validate_proxy_auth_config "$SECURITY_XRAY" || return 1
+    SECURITY_USER_HASH=$(security_user_fingerprint) || return 1
+    # Accounts must already be synchronized. Never reconstruct the user database.
+    jq -e --slurpfile users "$SECURITY_USERS" '
+        ($users[0].users | map(select(.proxy_password != null and .proxy_password != "") |
+            {user: .username, pass: .proxy_password}) | sort_by(.user)) as $accounts |
+        ($accounts | length > 0) and
+        all(.inbounds[] | select(.tag == "http-proxy" or .tag == "socks5-proxy");
+            (.settings.accounts | sort_by(.user)) == $accounts)
+    ' "$SECURITY_XRAY" >/dev/null || { echo 'Saved users and proxy accounts disagree; synchronize accounts before reconciliation' >&2; return 1; }
+    validate_proxy_firewall "$SECURITY_NOTLS" || return 1
+    SECURITY_FIREWALL_CHANGES=$(_proxy_firewall_changes "$SECURITY_NOTLS") || return 1
+    SECURITY_WORK=$(mktemp -d) || return 1
+    chmod 700 "$SECURITY_WORK" || return 1
+    (umask 077; stage_proxy_security_config "$SECURITY_XRAY" "$SECURITY_WORK/xray.json") || return 1
+    security_stage_nginx "$SECURITY_NGINX" "$SECURITY_WORK/nginx.conf" "$SECURITY_NOTLS" || return 1
+    validate_proxy_jail_ownership "$SECURITY_PORTS" allow-missing-log || return 1
+    if [[ -e "$SECURITY_LOG" ]]; then
+        validate_proxy_jail_ownership "$SECURITY_PORTS" || return 1
+    else
+        [[ -d "$(dirname "$SECURITY_LOG")" && -w "$(dirname "$SECURITY_LOG")" ]] || return 1
+        # A missing journal is provisioned after the backup, before any listener restart.
+        SECURITY_LOG_MISSING=true
+    fi
+    security_image_capability "$SECURITY_IMAGE" || { echo 'Image lacks the required authentication journal capability' >&2; return 1; }
+    docker run --rm --pull never --network none --entrypoint /usr/bin/xray -v "$SECURITY_WORK/xray.json:/tmp/xray.json:ro" "$SECURITY_IMAGE" run -test -config /tmp/xray.json >/dev/null 2>&1 || return 1
+    docker run --rm --pull never --network none --entrypoint nginx -v "$SECURITY_WORK/nginx.conf:/etc/nginx/nginx.conf:ro" -v /etc/letsencrypt:/etc/letsencrypt:ro "$SECURITY_IMAGE" -t >/dev/null 2>&1 || return 1
+    SECURITY_CONFIG_HASH=$(sha256sum "$SECURITY_XRAY" "$SECURITY_NGINX" "$SECURITY_USERS" "$SECURITY_ROOT/.env" "$SECURITY_ROOT/docker-compose.yml") || return 1
+}
+
+security_backup() {
+    local base="${FT_FAIL2BAN_DIR:-/etc/fail2ban}" rotation="${FT_LOGROTATE_DIR:-/etc/logrotate.d}" file port state
+    [[ "$(sha256sum "$SECURITY_XRAY" "$SECURITY_NGINX" "$SECURITY_USERS" "$SECURITY_ROOT/.env" "$SECURITY_ROOT/docker-compose.yml")" == "$SECURITY_CONFIG_HASH" ]] || return 1
+    mkdir "$SECURITY_WORK/backup" || return 1
+    SECURITY_BACKUP_PATHS=("$SECURITY_XRAY" "$SECURITY_NGINX" "$SECURITY_OVERRIDE" "$SECURITY_ROOT/.env"
+        "$base/jail.d/familytraffic-proxy-auth.conf" "$base/filter.d/familytraffic-proxy-auth.conf"
+        "$rotation/familytraffic-proxy-auth")
+    for file in "$base/jail.conf" "$base/jail.local" "$base"/jail.d/*.conf "$base"/jail.d/*.local; do
+        [[ -f "$file" && "$file" != "$base/jail.d/familytraffic-proxy-auth.conf" ]] || continue
+        if grep -Eq '^\[(vless-http|vless-socks5|familytraffic-(socks5|http)(-notls)?)\]' "$file"; then
+            SECURITY_BACKUP_PATHS+=("$file" "$file.disabled" "$file.ft-security-backup")
+        fi
+    done
+    local index=0
+    for file in "${SECURITY_BACKUP_PATHS[@]}"; do
+        [[ ! -L "$file" ]] || return 1
+        if [[ -e "$file" ]]; then cp -p "$file" "$SECURITY_WORK/backup/$index" || return 1; fi
+        index=$((index + 1))
+    done
+    LC_ALL=C ufw status numbered > "$SECURITY_WORK/ufw.before" || return 1
+    # Keep exact old project rule commands, without copying the whole host ruleset.
+    : > "$SECURITY_WORK/firewall.restore"
+    while IFS= read -r port; do
+        [[ -n "$port" ]] || continue
+        state=$(sed -nE "s/^\\[[[:space:]]*[0-9]+\\][[:space:]]*${port}\/tcp[[:space:]]+(ALLOW|LIMIT)[[:space:]]+IN[[:space:]]+Anywhere[[:space:]]+# (.*)$/\\1|\\2/p" "$SECURITY_WORK/ufw.before" | head -1)
+        printf '%s|%s\n' "$port" "$state" >> "$SECURITY_WORK/firewall.restore"
+    done <<< "$SECURITY_FIREWALL_CHANGES"
+}
+
+security_compose() {
+    (cd "$SECURITY_ROOT" && docker compose -f docker-compose.yml -f "$SECURITY_OVERRIDE" "$@")
+}
+
+security_apply() {
+    [[ "$SECURITY_NOTLS" == true || "$SECURITY_NOTLS" == false ]] || return 1
+    [[ "$(security_user_fingerprint)" == "$SECURITY_USER_HASH" ]] || return 1
+    # Stop the compatible old pair before writing either bind-mounted file.
+    SECURITY_STOPPED=true
+    if [[ "${SECURITY_EXISTED:-true}" == true ]]; then
+        security_compose_with_old stop familytraffic || return 1
+    fi
+    if [[ "${SECURITY_LOG_MISSING:-false}" == true ]]; then
+        (umask 077; : > "$SECURITY_LOG") || return 1
+    fi
+    validate_proxy_jail_ownership "$SECURITY_PORTS" || return 1
+    cat "$SECURITY_WORK/xray.json" > "$SECURITY_XRAY" || return 1
+    cat "$SECURITY_WORK/nginx.conf" > "$SECURITY_NGINX" || return 1
+    python3 - "$SECURITY_ROOT/.env" "$SECURITY_NOTLS" <<'PY' || return 1
+import pathlib,sys
+path=pathlib.Path(sys.argv[1]);value=sys.argv[2]
+lines=path.read_text().splitlines(keepends=True)
+result=[];written=False
+for line in lines:
+    if line.startswith('PROXY_NOTLS_ENABLED='):
+        if not written:result.append('PROXY_NOTLS_ENABLED='+value+'\n');written=True
+    else:result.append(line)
+if not written:
+    if result and not result[-1].endswith('\n'):result[-1]+='\n'
+    result.append('PROXY_NOTLS_ENABLED='+value+'\n')
+with path.open('w') as out:out.write(''.join(result))
+PY
+    (umask 077; printf 'services:\n  familytraffic:\n    image: %s\n' "$SECURITY_IMAGE" > "$SECURITY_OVERRIDE") || return 1
+    security_compose up -d --no-build --pull never familytraffic || return 1
+    [[ "$(security_user_fingerprint)" == "$SECURITY_USER_HASH" ]]
+}
+
+security_compose_with_old() {
+    if [[ -f "$SECURITY_OVERRIDE" ]]; then security_compose "$@"
+    else (cd "$SECURITY_ROOT" && docker compose -f docker-compose.yml "$@"); fi
+}
+
+security_verify_traffic() {
+    local domain
+    domain=$(sed -nE 's/^DOMAIN=([A-Za-z0-9.-]+)$/\1/p' "$SECURITY_ROOT/.env")
+    [[ -n "$domain" && "$domain" != *$'\n'* ]] || return 1
+    # Keep credentials in a private curl config, outside argv and diagnostic output.
+    python3 - "$SECURITY_XRAY" "$SECURITY_WORK/probe.curl" "$domain" <<'PY' || return 1
+import json,os,sys
+config=json.load(open(sys.argv[1]))
+account=next(i for i in config['inbounds'] if i['tag']=='http-proxy')['settings']['accounts'][0]
+def quote(value):return json.dumps(value,ensure_ascii=False)
+with open(sys.argv[2],'w') as out:
+    out.write('proxy = '+quote('https://'+sys.argv[3]+':8118')+'\n')
+    out.write('proxy-user = '+quote(account['user']+':'+account['pass'])+'\n')
+    out.write('resolve = '+quote(sys.argv[3]+':8118:127.0.0.1')+'\n')
+os.chmod(sys.argv[2],0o600)
+PY
+    [[ "$(curl --config "$SECURITY_WORK/probe.curl" --noproxy '' --silent --fail --retry 10 --retry-connrefused --retry-delay 1 --retry-max-time 20 --max-time 20 --output /dev/null --write-out '%{http_code}' "${FT_SECURITY_TEST_URL:-https://example.com/}")" == 200 ]] || return 1
+    security_verify_auth_event
+}
+
+security_verify_auth_event() {
+    python3 - "$SECURITY_WORK" "$SECURITY_LOG" "$SECURITY_XRAY" "${FT_SECURITY_TEST_URL:-https://example.com/}" <<'PY'
+import datetime,json,os,pathlib,re,subprocess,sys,time,uuid
+work,journal,config,target=sys.argv[1:]
+path=pathlib.Path(journal)
+before=path.stat()
+accounts={a['user'] for i in json.load(open(config))['inbounds'] if i['tag']=='http-proxy' for a in i['settings']['accounts']}
+user='ft-probe-'+uuid.uuid4().hex
+while user in accounts:user='ft-probe-'+uuid.uuid4().hex
+text=(pathlib.Path(work)/'probe.curl').read_text()
+text=re.sub(r'^proxy-user = .*$',lambda _: 'proxy-user = '+json.dumps(user+':'+uuid.uuid4().hex),text,flags=re.M)
+probe=pathlib.Path(work)/'failure.curl'
+probe.write_text(text);os.chmod(probe,0o600)
+response=subprocess.run(['curl','--config',str(probe),'--noproxy','','--interface','127.0.0.2','--silent','--max-time','5','--output','/dev/null','--write-out','%{http_connect}',target],capture_output=True,text=True)
+if response.stdout!='407':raise SystemExit('Controlled authentication rejection failed')
+deadline=time.monotonic()+2
+while True:
+    current=path.stat()
+    with path.open('rb') as log:
+        if current.st_ino==before.st_ino:log.seek(before.st_size)
+        lines=log.read().splitlines()
+    for line in lines:
+        if re.fullmatch(rb'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z FT_AUTH_FAILURE protocol=http src=127\.0\.0\.2',line):
+            timestamp=datetime.datetime.strptime(line[:20].decode(),'%Y-%m-%dT%H:%M:%SZ').replace(tzinfo=datetime.timezone.utc).timestamp()
+            if abs(time.time()-timestamp)<=10:raise SystemExit(0)
+    if time.monotonic()>=deadline:raise SystemExit('Controlled authentication rejection produced no fresh journal event')
+    time.sleep(.05)
+PY
+}
+
+security_validate_journal_mounts() {
+    python3 -c '
+import json,os,sys
+mounts=json.loads(sys.argv[1]);expected=os.path.realpath(sys.argv[2])
+cover=[m for m in mounts if m["Destination"]=="/var/log/xray" or m["Destination"].startswith("/var/log/xray/")]
+sys.exit(0 if len(cover)==1 and cover[0]["Destination"]=="/var/log/xray" and cover[0].get("Type")=="bind" and cover[0].get("RW") is True and os.path.realpath(cover[0]["Source"])==expected else 1)
+' "$1" "$2"
+}
+
+security_reconcile_policy() {
+    SECURITY_POLICY_STARTED=true
+    reconcile_proxy_firewall "$SECURITY_NOTLS" || return 1
+    configure_proxy_auth_jail "$SECURITY_PORTS" || return 1
+    fail2ban-client -t >/dev/null 2>&1 || return 1
+    reload_fail2ban || return 1
+    verify_proxy_auth_jail "$SECURITY_PORTS"
+}
+
+security_inspect() {
+    security_paths
+    local notls ports expected_image actual_image active_xray active_nginx staged_nginx changes mounts
+    notls=$(resolve_proxy_notls "${PROXY_NOTLS_ENABLED-}" "$SECURITY_ROOT/.env") || return 1
+    ports=$(proxy_auth_ports "$notls") || return 1
+    validate_proxy_auth_config "$SECURITY_XRAY" || return 1
+    staged_nginx=$(security_stage_nginx "$SECURITY_NGINX" /dev/stdout "$notls") || return 1
+    [[ "$staged_nginx" == "$(cat "$SECURITY_NGINX")" ]] || return 1
+    jq -e '[.inbounds[] | select(.tag == "http-proxy" or .tag == "socks5-proxy") |
+        .listen == "127.0.0.1" and .streamSettings.sockopt.acceptProxyProtocol == true] |
+        length == 2 and all' "$SECURITY_XRAY" >/dev/null || return 1
+    [[ -f "$SECURITY_LOG" && ! -L "$SECURITY_LOG" && "$(stat -c %a "$SECURITY_LOG")" == 600 ]] || return 1
+    mounts=$(docker inspect --format '{{json .Mounts}}' familytraffic) || return 1
+    security_validate_journal_mounts "$mounts" "$(dirname "$SECURITY_LOG")" || return 1
+    [[ "$(docker exec familytraffic cat /etc/familytraffic/auth-journal-capability)" == ft-auth-journal-v1 ]] || return 1
+    if [[ -f "$SECURITY_OVERRIDE" ]]; then
+        expected_image=$(sed -nE 's/^[[:space:]]+image: (sha256:[a-f0-9]{64})$/\1/p' "$SECURITY_OVERRIDE")
+        actual_image=$(docker inspect --format '{{.Image}}' familytraffic) || return 1
+        [[ -n "$expected_image" && "$expected_image" == "$actual_image" ]] || return 1
+    fi
+    active_xray=$(docker exec familytraffic sha256sum /etc/xray/config.json) || return 1
+    active_nginx=$(docker exec familytraffic sha256sum /etc/nginx/nginx.conf) || return 1
+    [[ "${active_xray%% *}" == "$(sha256sum "$SECURITY_XRAY" | cut -d' ' -f1)" ]] || return 1
+    [[ "${active_nginx%% *}" == "$(sha256sum "$SECURITY_NGINX" | cut -d' ' -f1)" ]] || return 1
+    docker exec familytraffic /usr/bin/xray run -test -config /etc/xray/config.json >/dev/null 2>&1 || return 1
+    docker exec familytraffic nginx -t >/dev/null 2>&1 || return 1
+    changes=$(_proxy_firewall_changes "$notls") || return 1
+    [[ -z "$changes" ]] || return 1
+    verify_proxy_auth_jail "$ports" || return 1
+    echo 'Proxy image, authentication, source forwarding, firewall, and live journal monitoring verified.'
+}
+
+security_rollback() {
+    local file index=0 port action comment failed=false
+    [[ "${SECURITY_STOPPED:-false}" == true ]] || return 0
+    security_compose_with_old stop familytraffic || failed=true
+    for file in "${SECURITY_BACKUP_PATHS[@]}"; do
+        # The first four snapshots are configuration files. Leave policy untouched
+        # if this transaction failed before attempting the policy stage.
+        if ((index >= 4)) && [[ "${SECURITY_POLICY_STARTED:-false}" != true ]]; then
+            index=$((index + 1)); continue
+        fi
+        if [[ -L "$file" ]]; then failed=true; index=$((index + 1)); continue; fi
+        if [[ -f "$SECURITY_WORK/backup/$index" ]]; then
+            cat "$SECURITY_WORK/backup/$index" > "$file" || failed=true
+            chmod --reference="$SECURITY_WORK/backup/$index" "$file" || failed=true
+            chown --reference="$SECURITY_WORK/backup/$index" "$file" || failed=true
+        else
+            rm -f -- "$file" || failed=true
+        fi
+        index=$((index + 1))
+    done
+    # Pin the rollback restart to the actual previous image, even if its old tag moved.
+    printf 'services:\n  familytraffic:\n    image: %s\n' "$SECURITY_OLD_IMAGE" > "$SECURITY_WORK/rollback.yml" || failed=true
+    if [[ "${SECURITY_EXISTED:-true}" == true ]]; then
+        (cd "$SECURITY_ROOT" && docker compose -f docker-compose.yml -f "$SECURITY_WORK/rollback.yml" up -d --no-build --pull never familytraffic) || failed=true
+    else
+        security_compose_with_old rm -f familytraffic || failed=true
+    fi
+    if [[ "${SECURITY_POLICY_STARTED:-false}" == true ]]; then
+        if validate_proxy_firewall "$SECURITY_NOTLS"; then
+            while IFS='|' read -r port action comment; do
+                [[ -n "$port" ]] || continue
+                case "$action" in
+                    ALLOW|LIMIT) ufw "${action,,}" "$port/tcp" comment "$comment" || failed=true ;;
+                    '') ufw --force delete allow "$port/tcp" || failed=true ;;
+                    *) failed=true ;;
+                esac
+            done < "$SECURITY_WORK/firewall.restore"
+            ufw reload || failed=true
+        else failed=true; fi
+        fail2ban-client -t >/dev/null 2>&1 && reload_fail2ban || failed=true
+    fi
+    [[ "$(security_user_fingerprint)" == "$SECURITY_USER_HASH" ]] || failed=true
+    if [[ "$failed" == true ]]; then
+        SECURITY_KEEP_BACKUP=true
+        echo "Recovery backup retained at $SECURITY_WORK" >&2
+        return 1
+    fi
+}
+
+security_cleanup() {
+    # A later signal must not run rollback after its backup files are removed.
+    SECURITY_BACKUP_READY=false
+    SECURITY_STOPPED=false
+    [[ "${SECURITY_KEEP_BACKUP:-false}" != true ]] || return 0
+    if [[ -n "${SECURITY_WORK:-}" && -d "$SECURITY_WORK" ]]; then rm -rf -- "$SECURITY_WORK"; fi
+    SECURITY_WORK=''
+}
+
+security_main() {
+    case "${1:-}" in
+        check)
+            [[ "$#" -eq 1 ]] || return 2
+            security_check
+            ;;
+        reconcile)
+            [[ "$#" -eq 3 && "$2" == --image ]] || { echo 'Usage: familytraffic-security reconcile --image IMAGE' >&2; return 2; }
+            [[ "$EUID" -eq 0 ]] || { echo 'Reconciliation requires root' >&2; return 1; }
+            security_reconcile "$3"
+            ;;
+        *) echo 'Usage: familytraffic-security check | reconcile --image IMAGE' >&2; return 2 ;;
+    esac
+}
+
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+    set -euo pipefail
+    trap 'if [[ "${SECURITY_BACKUP_READY:-false}" == true ]]; then security_rollback || true; fi; security_cleanup; exit 1' INT TERM
+    security_main "$@"
+fi

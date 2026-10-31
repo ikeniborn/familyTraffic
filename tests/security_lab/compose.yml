@@ -1,0 +1,63 @@
+services:
+  node:
+    image: ${FT_LAB_NODE_IMAGE}
+    cap_add: [NET_ADMIN]
+    environment:
+      TZ: MSK-3
+    volumes:
+      - ${FT_LAB_REPO}/lib:/repo/lib:ro
+      - ${FT_LAB_REPO}/tests/security_lab:/repo/tests/security_lab:ro
+      - ${FT_LAB_DIR}:/lab
+    networks: [lab]
+  proxy:
+    image: ${FT_LAB_IMAGE}
+    network_mode: service:node
+    depends_on: [node]
+    entrypoint: [/usr/bin/supervisord, -c, /etc/familytraffic/supervisord.conf]
+    volumes:
+      - ${FT_LAB_DIR}/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ${FT_LAB_DIR}/xray.json:/etc/xray/config.json:ro
+      - ${FT_LAB_DIR}/certs:/etc/letsencrypt/live/proxy.lab:ro
+      - ${FT_LAB_DIR}/logs:/var/log/xray
+  target:
+    image: ${FT_LAB_NODE_IMAGE}
+    entrypoint: [python3, /repo/tests/security_lab/probe.py, target]
+    volumes:
+      - ${FT_LAB_REPO}/lib:/repo/lib:ro
+      - ${FT_LAB_REPO}/tests/security_lab:/repo/tests/security_lab:ro
+      - ${FT_LAB_DIR}:/lab:ro
+    networks: [lab]
+  valid:
+    image: ${FT_LAB_NODE_IMAGE}
+    volumes:
+      - ${FT_LAB_REPO}/lib:/repo/lib:ro
+      - ${FT_LAB_REPO}/tests/security_lab:/repo/tests/security_lab:ro
+      - ${FT_LAB_DIR}:/lab:ro
+    networks: [lab]
+  offender:
+    image: ${FT_LAB_NODE_IMAGE}
+    volumes:
+      - ${FT_LAB_REPO}/lib:/repo/lib:ro
+      - ${FT_LAB_REPO}/tests/security_lab:/repo/tests/security_lab:ro
+      - ${FT_LAB_DIR}:/lab:ro
+    networks: [lab]
+  changed:
+    image: ${FT_LAB_NODE_IMAGE}
+    volumes:
+      - ${FT_LAB_REPO}/lib:/repo/lib:ro
+      - ${FT_LAB_REPO}/tests/security_lab:/repo/tests/security_lab:ro
+      - ${FT_LAB_DIR}:/lab:ro
+    networks: [lab]
+  xray-client:
+    image: ${FT_LAB_IMAGE}
+    network_mode: service:valid
+    depends_on: [valid]
+    entrypoint: [/usr/bin/xray, run, -config, /lab/client.json]
+    volumes:
+      - ${FT_LAB_DIR}:/lab:ro
+networks:
+  lab:
+    internal: true
+    ipam:
+      config:
+        - subnet: ${FT_LAB_SUBNET}

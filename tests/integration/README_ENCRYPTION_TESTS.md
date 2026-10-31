@@ -94,3 +94,25 @@ cd /opt/familytraffic && sudo docker compose restart
 
 **Version:** 1.0
 **Date:** 2025-10-07
+
+## Isolated proxy security acceptance
+
+The security lab uses a prebuilt local application image, a disposable Debian UFW/fail2ban node, and three separate client addresses. All services use an internal Docker bridge. Only the node receives `NET_ADMIN`; its network namespace contains the tested firewall. The lab publishes no host ports and mounts no Docker socket.
+
+```bash
+bash tests/security_lab/run.sh --image familytraffic:proxy-security
+```
+
+The harness tests authenticated HTTP, HTTPS, SOCKS5, TLS-SOCKS, and VLESS Reality against a controlled TLS target. Certificate verification stays enabled. It checks connection bursts, credential classification, address/log spoofing, aggregate bans, another client's access, address changes, unban/expiry, rotation, jail restart, and UFW reload. The migration unit suite supplies synthetic image-mismatch and rollback faults.
+
+The lab selects an unused `/24` within the benchmarking range `198.18.0.0/15`. It checks existing Docker networks and host routes before creating its private bridge. A missing network capability or dependency fails the run. Cleanup targets only the unique Compose project and its node image. It never prunes shared Docker resources.
+
+Redacted output, application image ID, source SHA256 fingerprints, and firewall snapshots remain in `tests/security_lab/artifacts/<unique-project>/`. CI uploads that directory even on failure. Fixture certificates and credentials exist only in the temporary lab directory and are deleted during cleanup.
+
+For focused diagnostics, select one unittest case through `FT_LAB_TEST`:
+
+```bash
+FT_LAB_TEST=ProxySecurityTests.test_07_firewall_reload_preserves_ban bash tests/security_lab/run.sh --image familytraffic:proxy-security
+```
+
+A focused pass is not evidence that the complete security matrix passed. Run the complete harness after its relevant inputs stabilize.

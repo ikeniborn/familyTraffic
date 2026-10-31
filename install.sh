@@ -241,6 +241,10 @@ main() {
     print_step 1 "Checking root privileges"
     check_root
     print_success "Running with root privileges"
+    if [[ -e /opt/familytraffic/data/users.json ]]; then
+        print_error 'Existing deployment detected. Use familytraffic-security reconcile with a prebuilt image instead of the fresh installer.'
+        exit 1
+    fi
 
     # Run migration (upgrade path: /opt/familytraffic → /opt/familytraffic)
     if [[ -d /opt/familytraffic ]] && [[ ! -L /opt/familytraffic ]]; then
@@ -515,7 +519,12 @@ LOGROTATE_EOF
     echo ""
     print_message "${COLOR_CYAN}" "Next Steps:"
     print_message "${COLOR_YELLOW}" "  1. Configure sudoers (see instructions above)"
-    print_message "${COLOR_YELLOW}" "  2. Add your first user: familytraffic add-user <username>"
+    if [[ "${ENABLE_PUBLIC_PROXY:-false}" == true ]]; then
+        print_message "${COLOR_YELLOW}" "  2. Initial proxy user is provisioned. Retrieve its settings: familytraffic show-user <username>"
+        print_message "${COLOR_YELLOW}" "     Verify active protection: familytraffic-security check"
+    else
+        print_message "${COLOR_YELLOW}" "  2. Add your first user: familytraffic add-user <username>"
+    fi
     print_message "${COLOR_YELLOW}" "  3. Check service status: familytraffic status"
     print_message "${COLOR_YELLOW}" "  4. View logs: familytraffic logs"
     echo ""

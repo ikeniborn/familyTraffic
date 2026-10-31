@@ -106,6 +106,10 @@ SHORT_ID=""
 # Returns: 0 on success, 1 on failure
 # =============================================================================
 orchestrate_installation() {
+    if [[ -f "$USERS_JSON" ]] && ! jq -e '.users | type == "array" and length == 0' "$USERS_JSON" >/dev/null 2>&1; then
+        echo 'Existing users detected. Use familytraffic-security reconcile with a prebuilt image instead of the fresh installer.' >&2
+        return 1
+    fi
     echo ""
     echo -e "${BLUE}╔══════════════════════════════════════════════════════════════╗${NC}"
     echo -e "${BLUE}║           INSTALLATION ORCHESTRATION                         ║${NC}"
@@ -166,16 +170,16 @@ orchestrate_installation() {
         return 1
     }
 
+    # Create users before proxy configuration so listeners never start anonymously.
+    create_users_json || return 1
+    if [[ "${ENABLE_PUBLIC_PROXY:-false}" == true ]]; then
+        provision_initial_proxy_user || return 1
+    fi
+
     # Step 4: Create Xray configuration (with optional proxy support)
     # v3.2: Use ENABLE_PUBLIC_PROXY to determine if proxy inbounds should be created
     create_xray_config "${ENABLE_PUBLIC_PROXY:-false}" || {
         echo -e "${RED}Failed to create Xray configuration${NC}" >&2
-        return 1
-    }
-
-    # Step 5: Create empty users.json
-    create_users_json || {
-        echo -e "${RED}Failed to create users.json${NC}" >&2
         return 1
     }
 
@@ -225,40 +229,13 @@ orchestrate_installation() {
     # Step 9: Docker network — SKIPPED (v5.33: single container uses network_mode: host)
     echo -e "${CYAN}[9/12] Docker network: skipped (single container, network_mode: host)${NC}"
 
-    # Step 9.5: Setup fail2ban (v3.3 - for all proxy modes: localhost + public)
-    if [[ "${ENABLE_PROXY:-false}" == "true" ]]; then
-        echo ""
-        echo -e "${CYAN}[9.5/12] Setting up fail2ban for proxy protection...${NC}"
-
-        # Source fail2ban module
-        if [[ -f "${SCRIPT_DIR}/lib/fail2ban_setup.sh" ]]; then
-            source "${SCRIPT_DIR}/lib/fail2ban_setup.sh"
-        fi
-
-        if ! setup_fail2ban_for_proxy; then
-            echo -e "${RED}Failed to setup fail2ban${NC}" >&2
-            echo -e "${YELLOW}WARNING: Proxy will be less secure without fail2ban protection${NC}"
-            echo -e "${YELLOW}Continue installation? [y/N]: ${NC}" >&2
-            read -r response
-            if [[ "${response,,}" != "y" && "${response,,}" != "yes" ]]; then
-                return 1
-            fi
-        fi
-    fi
+    # Configure the managed jail only through the image/configuration transaction below.
 
     # Step 10: Configure UFW firewall
     configure_ufw || {
         echo -e "${RED}Failed to configure UFW${NC}" >&2
         return 1
     }
-
-    # Step 10.5: Configure proxy firewall rules (v3.2 - conditional on ENABLE_PUBLIC_PROXY)
-    if [[ "${ENABLE_PUBLIC_PROXY:-false}" == "true" ]]; then
-        configure_proxy_firewall_rules || {
-            echo -e "${RED}Failed to configure proxy firewall rules${NC}" >&2
-            return 1
-        }
-    fi
 
     # Step 11: Set permissions (MUST run BEFORE deploy_containers!)
     # Docker mounts files with current permissions - changing them after won't affect running containers
@@ -443,35 +420,13 @@ generate_short_id() {
 # Note: NO per-user IP filtering (user field doesn't work for HTTP/SOCKS5)
 # =============================================================================
 generate_routing_json() {
-    local proxy_ips_file="/opt/familytraffic/config/proxy_allowed_ips.json"
-    local allowed_ips='["127.0.0.1"]'  # Default: localhost only
-    local docker_subnet=""
-
-    # v5.30: familytraffic_nginx (stream block) connects to Xray via Docker network (not localhost)
-    # Ports 10800/18118 NOT exposed to host — Docker network provides isolation
-
-    # Check if proxy_allowed_ips.json exists (user-defined overrides)
-    if [[ -f "$proxy_ips_file" ]]; then
-        # Read allowed IPs from file
-        local user_ips=$(jq -c '.allowed_ips' "$proxy_ips_file" 2>/dev/null)
-
-        # Validate JSON and use if valid
-        if [[ -n "$user_ips" ]] && [[ "$user_ips" != "null" ]] && echo "$user_ips" | jq empty 2>/dev/null; then
-            allowed_ips="$user_ips"
-        else
-            # Fallback to defaults if file is corrupted (v4.3: localhost only)
-            allowed_ips='["127.0.0.1"]'
-        fi
+    local proxy_ips_file="${VLESS_DIR:-/opt/familytraffic}/config/proxy_allowed_ips.json"
+    if [[ -f "$proxy_ips_file" ]] && ! jq -e '.allowed_ips == ["127.0.0.1"]' "$proxy_ips_file" >/dev/null 2>&1; then
+        echo 'Custom proxy source restriction requires review before PROXY migration' >&2
+        return 1
     fi
 
-    # Generate routing configuration with server-level IP whitelist
-    # v5.30+ Nginx Architecture: Blocking rule removed because:
-    #   - Ports 10800/18118 NOT exposed publicly (Nginx terminates TLS on 1080/8118)
-    #   - Docker network provides isolation
-    #   - familytraffic_nginx connects from Docker network IP (not whitelisted 127.0.0.1)
-    #   - Blocking rule would break Nginx → Xray proxy connections
-    # Rule 1: Allow whitelisted IPs to access proxy ports (legacy, kept for future use)
-    # v5.31: Changed to AsIs for mobile network compatibility
+    # Private receivers authenticate clients; forwarded source IPs are no longer loopback.
     cat <<EOF
 ,
   "routing": {
@@ -480,7 +435,6 @@ generate_routing_json() {
       {
         "type": "field",
         "inboundTag": ["socks5-proxy", "http-proxy"],
-        "source": ${allowed_ips},
         "outboundTag": "direct"
       }
     ]
@@ -519,6 +473,7 @@ generate_socks5_inbound_json() {
       "udp": false,
       "ip": "0.0.0.0"
     },
+    "streamSettings": {"sockopt": {"acceptProxyProtocol": true}},
     "sniffing": {
       "enabled": true,
       "destOverride": ["http", "tls"]
@@ -557,6 +512,7 @@ generate_http_inbound_json() {
       "allowTransparent": false,
       "userLevel": 0
     },
+    "streamSettings": {"sockopt": {"acceptProxyProtocol": true}},
     "sniffing": {
       "enabled": true,
       "destOverride": ["http", "tls"]
@@ -672,6 +628,7 @@ EOF
 create_xray_config() {
     local enable_proxy="${1:-false}"
     local enable_tier2="${2:-false}"   # v5.30: Tier 2 transports (WS/XHTTP/gRPC) flag
+    local staged_config synced_config
     echo -e "${CYAN}[4/12] Creating Xray configuration...${NC}"
 
     # Validate required variables
@@ -682,6 +639,11 @@ create_xray_config() {
         return 1
     fi
 
+    local proxy_routing_json=""
+    if [[ "$enable_proxy" == true ]]; then
+        proxy_routing_json=$(generate_routing_json) || return 1
+    fi
+
     # Create Xray configuration
     local _xray_loglevel="warning"
     local _xray_access=""
@@ -690,7 +652,9 @@ create_xray_config() {
         _xray_access="/var/log/xray/access.log"
     fi
 
-    cat > "${XRAY_CONFIG}" <<EOF
+    staged_config=$(mktemp "${XRAY_CONFIG}.stage.XXXXXX") || return 1
+    chmod 600 "$staged_config" || return 1
+    cat > "$staged_config" <<EOF
 {
   "log": {
     "loglevel": "${_xray_loglevel}",
@@ -762,9 +726,7 @@ fi)],
       "protocol": "blackhole",
       "tag": "blocked"
     }
-  ]$(if [[ "$enable_proxy" == "true" ]]; then
-    generate_routing_json
-fi),
+  ]${proxy_routing_json},
   "policy": {
     "levels": {
       "0": {
@@ -783,20 +745,17 @@ fi),
 }
 EOF
 
-    if [[ ! -f "${XRAY_CONFIG}" ]]; then
+    if [[ ! -f "$staged_config" ]]; then
         echo -e "${RED}Failed to create ${XRAY_CONFIG}${NC}" >&2
         return 1
     fi
 
     # Validate JSON syntax
-    if ! jq empty "${XRAY_CONFIG}" 2>/dev/null; then
+    if ! jq empty "$staged_config" 2>/dev/null; then
+        rm -f "$staged_config"
         echo -e "${RED}Invalid JSON in ${XRAY_CONFIG}${NC}" >&2
         return 1
     fi
-
-    # Set permissions to 644 (readable by Xray container user: nobody)
-    chmod 644 "${XRAY_CONFIG}"
-    chown root:root "${XRAY_CONFIG}" 2>/dev/null || true
 
     echo "  ✓ Configuration file: ${XRAY_CONFIG}"
     echo "  ✓ Listen port: ${VLESS_PORT}"
@@ -836,9 +795,26 @@ EOF
     # Repopulate proxy accounts from users.json to prevent open proxy access.
     # xray HTTP inbound has no "auth" flag — empty accounts = no auth required.
     # This sync ensures accounts survive config regeneration (reinstall, setup).
-    if [[ "$enable_proxy" == "true" ]] && declare -f rebuild_proxy_accounts_from_users_json >/dev/null 2>&1; then
-        rebuild_proxy_accounts_from_users_json || log_warning "Proxy accounts rebuild failed (non-critical, re-run 'familytraffic setup' if proxy auth is broken)"
+    if [[ "$enable_proxy" == true ]]; then
+        synced_config=$(mktemp "${XRAY_CONFIG}.accounts.XXXXXX") || { rm -f "$staged_config"; return 1; }
+        if ! jq --slurpfile users "$USERS_JSON" '
+            ($users[0].users | map(select(.proxy_password != null and .proxy_password != "") |
+                {user: .username, pass: .proxy_password})) as $accounts |
+            (.inbounds[] | select(.tag == "http-proxy" or .tag == "socks5-proxy") |
+                .settings.accounts) = $accounts
+        ' "$staged_config" > "$synced_config" || ! validate_proxy_auth_config "$synced_config"; then
+            rm -f "$staged_config" "$synced_config"
+            echo 'Proxy account synchronization failed; public activation refused' >&2
+            return 1
+        fi
+        cat "$synced_config" > "$staged_config" || return 1
+        rm -f "$synced_config"
     fi
+    # Preserve existing bind-mount inodes. Publish only fully authenticated JSON.
+    cat "$staged_config" > "$XRAY_CONFIG" || { rm -f "$staged_config"; return 1; }
+    rm -f "$staged_config"
+    chmod 600 "$XRAY_CONFIG" || return 1
+    chown root:root "$XRAY_CONFIG" 2>/dev/null || true
 
     echo -e "${GREEN}✓ Xray configuration created${NC}"
     return 0
@@ -859,76 +835,31 @@ configure_proxy_firewall_rules() {
         return 0
     fi
 
-    echo -e "${CYAN}Configuring firewall for public proxy...${NC}"
+    PROXY_NOTLS_ENABLED=$(resolve_proxy_notls "${PROXY_NOTLS_ENABLED-}" "${VLESS_DIR}/.env") || return 1
+    export PROXY_NOTLS_ENABLED
+    reconcile_proxy_firewall "$PROXY_NOTLS_ENABLED"
 
-    # Ensure UFW is active
-    if ! ufw status | grep -q "Status: active"; then
-        echo -e "${RED}UFW is not active${NC}" >&2
-        return 1
+}
+
+# =============================================================================
+# Provision one proxy account before the first public listener activation.
+provision_initial_proxy_user() {
+    if jq -e '.users | any(.proxy_password != null and .proxy_password != "")' "$USERS_JSON" >/dev/null; then
+        return 0
     fi
-
-    # Check if SOCKS5 port rule already exists
-    if ! ufw status numbered | grep -q "1080/tcp"; then
-        echo "  Adding SOCKS5 port (1080/tcp) with rate limiting..."
-        if ! ufw limit 1080/tcp comment 'VLESS SOCKS5 Proxy (rate-limited)'; then
-            echo -e "${RED}Failed to add SOCKS5 firewall rule${NC}" >&2
-            return 1
-        fi
-        echo -e "${GREEN}  ✓ SOCKS5 port opened with rate limiting${NC}"
-    else
-        echo "  ✓ SOCKS5 port already open"
+    local username="${FT_INITIAL_PROXY_USERNAME:-}"
+    if [[ -z "$username" ]]; then
+        [[ -t 0 ]] || { echo 'Set FT_INITIAL_PROXY_USERNAME for first-install proxy provisioning' >&2; return 1; }
+        read -r -p 'Initial proxy username (3-32 letters, digits, underscores, or dashes): ' username
     fi
-
-    # Check if HTTP port rule already exists
-    if ! ufw status numbered | grep -q "8118/tcp"; then
-        echo "  Adding HTTP port (8118/tcp) with rate limiting..."
-        if ! ufw limit 8118/tcp comment 'VLESS HTTP Proxy (rate-limited)'; then
-            echo -e "${RED}Failed to add HTTP firewall rule${NC}" >&2
-            return 1
-        fi
-        echo -e "${GREEN}  ✓ HTTP port opened with rate limiting${NC}"
-    else
-        echo "  ✓ HTTP port already open"
-    fi
-
-    # No-TLS proxy ports (v5.35)
-    if [[ "${PROXY_NOTLS_ENABLED:-false}" == "true" ]]; then
-        if ! ufw status numbered | grep -q "1081/tcp"; then
-            echo "  Adding SOCKS5 no-TLS port (1081/tcp) with rate limiting..."
-            if ! ufw limit 1081/tcp comment 'VLESS SOCKS5 Proxy no-TLS (rate-limited)'; then
-                echo -e "${RED}Failed to add SOCKS5 no-TLS firewall rule${NC}" >&2
-                return 1
-            fi
-            echo -e "${GREEN}  ✓ SOCKS5 no-TLS port opened with rate limiting${NC}"
-        else
-            echo "  ✓ SOCKS5 no-TLS port already open"
-        fi
-
-        if ! ufw status numbered | grep -q "8119/tcp"; then
-            echo "  Adding HTTP no-TLS port (8119/tcp) with rate limiting..."
-            if ! ufw limit 8119/tcp comment 'VLESS HTTP Proxy no-TLS (rate-limited)'; then
-                echo -e "${RED}Failed to add HTTP no-TLS firewall rule${NC}" >&2
-                return 1
-            fi
-            echo -e "${GREEN}  ✓ HTTP no-TLS port opened with rate limiting${NC}"
-        else
-            echo "  ✓ HTTP no-TLS port already open"
-        fi
-    fi
-
-    # Reload UFW to apply rules
-    echo "  Reloading UFW..."
-    if ! ufw reload &>/dev/null; then
-        echo -e "${YELLOW}Warning: Failed to reload UFW${NC}"
-    fi
-
-    echo -e "${GREEN}✓ Firewall configured for public proxy${NC}"
-    echo ""
-    echo "Active proxy ports:"
-    ufw status numbered | grep -E "(1080|1081|8118|8119)/tcp" || true
-    echo ""
-
-    return 0
+    (
+        source "$SCRIPT_DIR_LIB/user_management.sh"
+        validate_username "$username" || exit 1
+        local password
+        password=$(generate_proxy_password) || exit 1
+        add_user_to_json "$username" "" "$password" "" chrome "" proxy || exit 1
+    ) || return 1
+    echo "Initial proxy account saved securely. After installation, use: familytraffic show-user $username"
 }
 
 # =============================================================================
@@ -940,7 +871,12 @@ configure_proxy_firewall_rules() {
 create_users_json() {
     echo -e "${CYAN}[5/12] Creating users database...${NC}"
 
-    # Create empty users JSON structure
+    if [[ -e "$USERS_JSON" ]]; then
+        jq -e '.users | type == "array"' "$USERS_JSON" >/dev/null || return 1
+        echo 'Existing users database preserved.'
+        return 0
+    fi
+    # Create empty users JSON structure.
     cat > "${USERS_JSON}" <<'EOF'
 {
   "users": [],
@@ -1142,11 +1078,9 @@ generate_nginx_config_wrapper() {
         echo -e "${YELLOW}Warning: Failed to create ${VLESS_DIR}/logs/nginx directory${NC}"
     }
 
-    # Read no-TLS flag from .env
-    local enable_notls="false"
-    if [[ -f "${VLESS_DIR}/.env" ]] && grep -q '^PROXY_NOTLS_ENABLED=true' "${VLESS_DIR}/.env" 2>/dev/null; then
-        enable_notls="true"
-    fi
+    local enable_notls
+    enable_notls=$(resolve_proxy_notls "${PROXY_NOTLS_ENABLED-}" "${VLESS_DIR}/.env") || return 1
+    export PROXY_NOTLS_ENABLED="$enable_notls"
 
     # Read debug mode from .env (if already written; during install FT_DEBUG comes from env)
     if [[ -f "${VLESS_DIR}/.env" ]]; then
@@ -1155,11 +1089,24 @@ generate_nginx_config_wrapper() {
         export FT_DEBUG="${_ft_debug_val:-${FT_DEBUG:-false}}"
     fi
 
-    # Generate nginx.conf (Phase 0: no Tier 2 subdomains yet; they are added by transport_manager.sh)
-    if ! generate_nginx_config "${cert_domain}" "false" "" "" "" "false" "${enable_notls}" > "${VLESS_DIR}/config/nginx/nginx.conf"; then
+    # Retain generated transport choices when repeating configuration generation.
+    local nginx_conf="${VLESS_DIR}/config/nginx/nginx.conf"
+    local enable_tier2=false enable_cloak=false ws_sub="" xhttp_sub="" grpc_sub=""
+    if [[ -f "$nginx_conf" ]]; then
+        ws_sub=$(awk '/# WebSocket Tier 2/ {print $1}' "$nginx_conf")
+        xhttp_sub=$(awk '/# XHTTP Tier 2/ {print $1}' "$nginx_conf")
+        grpc_sub=$(awk '/# gRPC Tier 2/ {print $1}' "$nginx_conf")
+        [[ -n "$ws_sub$xhttp_sub$grpc_sub" ]] && enable_tier2=true
+        if grep -q 'listen 4443' "$nginx_conf"; then enable_cloak=true; fi
+    fi
+    local tmp_conf="${nginx_conf}.tmp"
+    if ! generate_nginx_config "${cert_domain}" "$enable_tier2" "$ws_sub" "$xhttp_sub" "$grpc_sub" "$enable_cloak" "${enable_notls}" > "$tmp_conf"; then
+        rm -f "$tmp_conf"
         echo -e "${RED}Failed to generate Nginx configuration${NC}" >&2
         return 1
     fi
+    cat "$tmp_conf" > "$nginx_conf" || { rm -f "$tmp_conf"; return 1; }
+    rm -f "$tmp_conf"
 
     echo "  ✓ Nginx config: ${VLESS_DIR}/config/nginx/nginx.conf"
     echo "  ✓ Stream ports: 443 (SNI ssl_preread), 1080 (SOCKS5 TLS), 8118 (HTTP TLS)"
@@ -1212,6 +1159,9 @@ create_docker_compose() {
 # =============================================================================
 create_env_file() {
     echo -e "${CYAN}[8/12] Creating environment file...${NC}"
+
+    PROXY_NOTLS_ENABLED=$(resolve_proxy_notls "${PROXY_NOTLS_ENABLED-}" "${ENV_FILE}") || return 1
+    export PROXY_NOTLS_ENABLED
 
     # Detect external server IP
     local server_ip
@@ -1434,6 +1384,10 @@ EOF
 # Returns: 0 on success, 1 on failure
 # =============================================================================
 deploy_containers() {
+    if ! validate_proxy_auth_config "${XRAY_CONFIG}"; then
+        echo 'Public activation refused. Provision proxy users and synchronize accounts before starting containers.' >&2
+        return 1
+    fi
     echo -e "${CYAN}[13/14] Deploying Docker containers...${NC}"
 
     # Pre-flight checks: Verify critical files exist before starting containers
@@ -1466,7 +1420,7 @@ deploy_containers() {
         return 1
     }
 
-    # Pull images
+    # Pull a prebuilt image. Reconciliation itself never pulls or builds.
     echo "  Pulling Docker images..."
     docker compose pull || {
         echo -e "${RED}Failed to pull Docker images${NC}" >&2
@@ -1474,12 +1428,17 @@ deploy_containers() {
     }
     echo "  ✓ Images pulled"
 
-    # Start containers
-    echo "  Starting containers..."
-    docker compose up -d || {
-        echo -e "${RED}Failed to start containers${NC}" >&2
-        return 1
-    }
+    if [[ "${ENABLE_PUBLIC_PROXY:-false}" == true ]]; then
+        source "$SCRIPT_DIR_LIB/fail2ban_setup.sh"
+        check_fail2ban_installed || install_fail2ban || return 1
+        source "$SCRIPT_DIR_LIB/../scripts/familytraffic-security"
+        local selected_image selected_id
+        selected_image=$(docker compose config --format json | jq -er '.services.familytraffic.image') || return 1
+        selected_id=$(docker image inspect --format '{{.Id}}' "$selected_image") || return 1
+        security_reconcile "$selected_id" || return 1
+    else
+        docker compose up -d --no-build || return 1
+    fi
 
     # Wait for containers to be healthy
     echo "  Waiting for containers to start..."
@@ -1562,6 +1521,10 @@ install_cli_tools() {
         echo -e "${RED}Failed to create symlink${NC}" >&2
         return 1
     }
+
+    cp "$project_root/scripts/familytraffic-security" "$SCRIPTS_DIR/familytraffic-security" || return 1
+    chmod 755 "$SCRIPTS_DIR/familytraffic-security" || return 1
+    ln -sf "$SCRIPTS_DIR/familytraffic-security" /usr/local/sbin/familytraffic-security || return 1
 
     # v5.23: Install familytraffic-external-proxy CLI tool
     local external_proxy_cli_source="${project_root}/scripts/familytraffic-external-proxy"
@@ -1800,7 +1763,10 @@ set_permissions() {
     fi
 
     # Readable files: 644
-    find "${LOGS_DIR}" -type f -exec chmod 644 {} \; 2>/dev/null || true
+    find "${LOGS_DIR}" -type f ! -name auth.log -exec chmod 644 {} \; 2>/dev/null || true
+    if [[ -f "$LOGS_DIR/xray/auth.log" ]]; then
+        chmod 600 "$LOGS_DIR/xray/auth.log" || return 1
+    fi
     chmod 644 "${DOCKER_COMPOSE_FILE}" 2>/dev/null || true
     chmod 644 "${NGINX_CONFIG}" 2>/dev/null || true
 
