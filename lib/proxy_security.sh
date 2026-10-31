@@ -33,8 +33,10 @@ resolve_proxy_notls() {
 validate_proxy_auth_config() {
     if ! jq -e '
         (.inbounds | type == "array") and
-        ([.inbounds[] | select(.protocol == "http" or .protocol == "socks") |
-            ((.settings.accounts | type == "array" and length > 0) and
+        ([.inbounds[] | select(.tag == "http-proxy" or .tag == "socks5-proxy") |
+            (((.tag == "http-proxy" and .protocol == "http") or
+              (.tag == "socks5-proxy" and .protocol == "socks")) and
+             (.settings.accounts | type == "array" and length > 0) and
              all(.settings.accounts[];
                  (.user | type == "string" and length > 0) and
                  (.pass | type == "string" and length > 0)) and
@@ -75,7 +77,7 @@ stage_proxy_security_config() {
         echo 'Proxy staging failed: invalid inbounds or ambiguous custom proxy source restriction' >&2
         return 1
     fi
-    cat "$staged" > "$output" || { rm -f "$staged"; return 1; }
+    (umask 077; cat "$staged" > "$output") || { rm -f "$staged"; return 1; }
     rm -f "$staged"
 }
 

@@ -60,3 +60,9 @@ setup() {
     printf ']}' >> "$config"
     jq -e '[.inbounds[] | select(.tag != "reality") | .listen == "127.0.0.1" and .streamSettings.sockopt.acceptProxyProtocol == true] | length == 2 and all' "$config"
 }
+
+@test "private custom unauthenticated receiver is outside generated public proxy guard" {
+    printf '%s\n' '{"inbounds":[{"tag":"custom-private-http","listen":"127.0.0.1","port":18119,"protocol":"http","settings":{"accounts":[]}}]}' > "$config"
+    run validate_proxy_auth_config "$config"
+    [ "$status" -eq 0 ]
+}
