@@ -383,6 +383,9 @@ security_rollback() {
 }
 
 security_cleanup() {
+    # A later signal must not run rollback after its backup files are removed.
+    SECURITY_BACKUP_READY=false
+    SECURITY_STOPPED=false
     [[ "${SECURITY_KEEP_BACKUP:-false}" != true ]] || return 0
     if [[ -n "${SECURITY_WORK:-}" && -d "$SECURITY_WORK" ]]; then rm -rf -- "$SECURITY_WORK"; fi
     SECURITY_WORK=''

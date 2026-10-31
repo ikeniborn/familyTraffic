@@ -317,3 +317,15 @@ MOCK
     [ "$status" -ne 0 ]
     [ "$(cat "$BATS_TEST_TMPDIR/protected/state")" = durable-fixture ]
 }
+
+@test "completed cleanup disarms rollback before deleting transaction backups" {
+    source "$PROJECT_ROOT/scripts/familytraffic-security"
+    SECURITY_WORK="$BATS_TEST_TMPDIR/transaction"
+    mkdir -p "$SECURITY_WORK/backup"
+    SECURITY_BACKUP_READY=true
+    SECURITY_STOPPED=true
+    security_cleanup
+    [ "$SECURITY_BACKUP_READY" = false ]
+    [ "$SECURITY_STOPPED" = false ]
+    [ -z "$SECURITY_WORK" ]
+}
