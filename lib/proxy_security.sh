@@ -109,6 +109,10 @@ _proxy_firewall_changes() {
                 return 1
             fi
             case "$comment" in
+                '# familyTraffic authenticated proxy')
+                    [[ "$action" == ALLOW && ( "$port" == 1080 || "$port" == 1081 || "$port" == 8118 ) ]] || return 1 ;;
+                '# familyTraffic HTTP proxy no-TLS')
+                    [[ "$action" == ALLOW && "$port" == 8119 ]] || return 1 ;;
                 '# FamilyTraffic proxy auth'|'# VLESS SOCKS5 Proxy (rate-limited)'|'# VLESS HTTP Proxy (rate-limited)'|'# VLESS SOCKS5 Proxy no-TLS (rate-limited)'|'# VLESS HTTP Proxy no-TLS (rate-limited)') ;;
                 *) echo "Unrecognized UFW rule for proxy port $port" >&2; return 1 ;;
             esac

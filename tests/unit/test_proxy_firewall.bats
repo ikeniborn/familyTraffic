@@ -53,3 +53,10 @@ setup() {
     [ ! -s "$trace" ]
     [ ! -s "$rules" ]
 }
+@test "authorized repaired-host ALLOW signatures remain unchanged" {
+    printf '%s\n' '1080/tcp ALLOW IN Anywhere # familyTraffic authenticated proxy' '1081/tcp ALLOW IN Anywhere # familyTraffic authenticated proxy' '8118/tcp ALLOW IN Anywhere # familyTraffic authenticated proxy' '8119/tcp ALLOW IN Anywhere # familyTraffic HTTP proxy no-TLS' > "$rules"
+    cp "$rules" "$BATS_TEST_TMPDIR/before"
+    reconcile_proxy_firewall true
+    [ ! -s "$trace" ]
+    cmp "$rules" "$BATS_TEST_TMPDIR/before"
+}
