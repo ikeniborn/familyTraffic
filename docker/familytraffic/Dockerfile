@@ -3,7 +3,7 @@
 # nginx + xray + certbot + supervisord
 #
 # 3-stage build:
-#   Stage 1: xray-src — extract xray binary from teddysun image
+#   Stage 1: xray-src — build reviewed Xray source and authentication journal
 #   Stage 2: mtg-src  — download mtg v2 static binary (nineseconds/mtg)
 #   Stage 3: final    — nginx:alpine + supervisor + certbot (apk) + xray + mtg
 #
@@ -15,15 +15,18 @@
 # which does not exist when supervisor brings Python via Alpine apk (/usr/bin).
 
 # All FROM-referenced ARGs must be declared before the first FROM.
-ARG XRAY_IMAGE=teddysun/xray:24.11.30
+ARG GO_BUILDER=golang:1.23.4-alpine@sha256:c23339199a08b0e12032856908589a6d41a0dab141b8b3b21f156fc571a3f1d3
 ARG NGINX_IMAGE=nginx:1.27-alpine
 ARG MTG_VERSION=2.2.3
 ARG MTG_ARCH=amd64
 
 # =============================================================================
-# Stage 1: Extract Xray binary
+# Stage 1: Build pinned, patched Xray
 # =============================================================================
-FROM ${XRAY_IMAGE} AS xray-src
+FROM ${GO_BUILDER} AS xray-src
+RUN apk add --no-cache git
+COPY docker/familytraffic/xray /resources
+RUN sh /resources/build.sh build /usr/bin/xray
 
 # =============================================================================
 # Stage 2: Download mtg static binary (no compilation)
@@ -63,6 +66,8 @@ RUN apk upgrade --no-cache \
     netcat-openbsd \
     && mkdir -p /etc/familytraffic \
     && mkdir -p /var/log/xray \
+    && install -m 600 /dev/null /var/log/xray/auth.log \
+    && printf 'ft-auth-journal-v1\n' > /etc/familytraffic/auth-journal-capability \
     && mkdir -p /var/www/html/.well-known/acme-challenge
 
 # Copy xray binary from Stage 1
