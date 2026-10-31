@@ -48,6 +48,7 @@
 #   $7 - enable_notls: "true"/"false" — include no-TLS proxy ports 1081/8119 (v5.35)
 # Returns: nginx.conf content on stdout; 0 on success, 1 on failure
 # ============================================================================
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/proxy_security.sh"
 NGINX_CONF="${NGINX_CONF:-/opt/familytraffic/config/nginx/nginx.conf}"
 
 
@@ -58,7 +59,8 @@ generate_nginx_config() {
     local xhttp_subdomain="${4:-}"
     local grpc_subdomain="${5:-}"
     local enable_mtproxy_cloak="${6:-false}"
-    local enable_notls="${7:-false}"
+    local enable_notls
+    enable_notls=$(resolve_proxy_notls "${7-}" "${VLESS_DIR:-/opt/familytraffic}/.env") || return 1
 
     if [[ -z "$cert_domain" ]]; then
         echo "ERROR: generate_nginx_config requires cert_domain as \$1" >&2

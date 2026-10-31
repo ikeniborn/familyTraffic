@@ -143,17 +143,8 @@ source_modules() {
 # =============================================================================
 
 _detect_notls_enabled() {
-    local env_file="${INSTALL_ROOT}/.env"
-    if [[ -f "$env_file" ]] && grep -q '^PROXY_NOTLS_ENABLED=true' "$env_file" 2>/dev/null; then
-        echo "true"
-        return
-    fi
-    local nginx_conf="${INSTALL_ROOT}/config/nginx/nginx.conf"
-    if [[ -f "$nginx_conf" ]] && grep -q 'listen 1081' "$nginx_conf" 2>/dev/null; then
-        echo "true"
-        return
-    fi
-    echo "false"
+    source "${LIB_DIR}/proxy_security.sh"
+    resolve_proxy_notls "${PROXY_NOTLS_ENABLED-}" "${INSTALL_ROOT}/.env"
 }
 
 _set_notls_env() {
@@ -217,7 +208,7 @@ cmd_enable_notls() {
     echo ""
 
     local current
-    current=$(_detect_notls_enabled)
+    current=$(_detect_notls_enabled) || return 1
     if [[ "$current" == "true" ]]; then
         echo -e "${YELLOW}No-TLS ports already enabled (1081/tcp, 8119/tcp)${NC}"
         return 0
@@ -258,7 +249,7 @@ cmd_disable_notls() {
     echo ""
 
     local current
-    current=$(_detect_notls_enabled)
+    current=$(_detect_notls_enabled) || return 1
     if [[ "$current" == "false" ]]; then
         echo -e "${YELLOW}No-TLS ports already disabled${NC}"
         return 0

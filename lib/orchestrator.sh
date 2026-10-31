@@ -891,6 +891,9 @@ configure_proxy_firewall_rules() {
         echo "  ✓ HTTP port already open"
     fi
 
+    PROXY_NOTLS_ENABLED=$(resolve_proxy_notls "${PROXY_NOTLS_ENABLED-}" "${VLESS_DIR}/.env") || return 1
+    export PROXY_NOTLS_ENABLED
+
     # No-TLS proxy ports (v5.35)
     if [[ "${PROXY_NOTLS_ENABLED:-false}" == "true" ]]; then
         if ! ufw status numbered | grep -q "1081/tcp"; then
@@ -1142,11 +1145,9 @@ generate_nginx_config_wrapper() {
         echo -e "${YELLOW}Warning: Failed to create ${VLESS_DIR}/logs/nginx directory${NC}"
     }
 
-    # Read no-TLS flag from .env
-    local enable_notls="false"
-    if [[ -f "${VLESS_DIR}/.env" ]] && grep -q '^PROXY_NOTLS_ENABLED=true' "${VLESS_DIR}/.env" 2>/dev/null; then
-        enable_notls="true"
-    fi
+    local enable_notls
+    enable_notls=$(resolve_proxy_notls "${PROXY_NOTLS_ENABLED-}" "${VLESS_DIR}/.env") || return 1
+    export PROXY_NOTLS_ENABLED="$enable_notls"
 
     # Read debug mode from .env (if already written; during install FT_DEBUG comes from env)
     if [[ -f "${VLESS_DIR}/.env" ]]; then
@@ -1212,6 +1213,9 @@ create_docker_compose() {
 # =============================================================================
 create_env_file() {
     echo -e "${CYAN}[8/12] Creating environment file...${NC}"
+
+    PROXY_NOTLS_ENABLED=$(resolve_proxy_notls "${PROXY_NOTLS_ENABLED-}" "${ENV_FILE}") || return 1
+    export PROXY_NOTLS_ENABLED
 
     # Detect external server IP
     local server_ip
