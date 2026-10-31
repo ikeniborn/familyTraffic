@@ -201,3 +201,24 @@ sudo docker logs familytraffic --tail=50
 ```
 
 UUID и shortId не меняются между версиями — клиентские конфиги остаются действительными после переустановки.
+
+## Coordinated proxy security migration
+
+The authentication-journal image and PROXY-protocol receiver configuration must be deployed together. An ordinary image replacement is insufficient to reconcile host UFW and fail2ban state. Build images in CI, then pull the reviewed artifact before migration. Never build application images on the server.
+
+After reviewing the rollout, use the local immutable image identity:
+
+```bash
+docker image ls --no-trunc --digests
+read -r -p "Verified local image ID: " image_id
+sudo familytraffic-security reconcile --image "$image_id"
+sudo familytraffic-security check
+```
+
+The reconciliation entry point requires the image capability marker, valid staged configuration, nonempty authenticated accounts, and recognizable managed policy. It preserves user credentials, routes, transport choices, certificates, and volumes. Keep its restricted backup until acceptance checks pass.
+
+On partial failure, restore the previous compatible image/configuration pair and managed host policy. The migration reports failure even after rollback. Older protection may be ineffective; a successful rollback must not be reported as protected deployment success.
+
+Public listeners must never accept client-supplied PROXY metadata. Only loopback Xray receivers accept source metadata from nginx. Direct internal clients must use nginx entry points after this migration.
+
+A first public-proxy installation provisions its initial user before activation. Set `FT_INITIAL_PROXY_USERNAME` for unattended setup, or answer the interactive username prompt. The installer generates credentials and stores them with restrictive permissions. It does not print the password. Retrieve the client configuration through the existing `familytraffic show-user USER` command in a trusted terminal. A missing or invalid username must leave services stopped. Do not remove the authentication guard to complete installation.

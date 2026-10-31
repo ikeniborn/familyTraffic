@@ -550,3 +550,25 @@ cd /opt/familytraffic && docker compose pull && docker compose up -d
 ```bash
 docker manifest inspect ghcr.io/<owner>/familytraffic:1.1.4
 ```
+
+## Proxy authentication protection
+
+Public proxy ports use UFW ALLOW rules. TCP connection frequency is not an authentication signal. The dedicated `familytraffic-proxy-auth` jail counts credential mismatches instead. Existing project-managed LIMIT rules are reconciled during the security migration. Custom source restrictions require operator review.
+
+Check the effective configuration after installation or an image-only update:
+
+```bash
+sudo familytraffic-security check
+```
+
+A nonzero result means protection has not been verified. Resolve the diagnostic before treating deployment as successful. General process health alone does not prove authentication, source attribution, or bans.
+
+The proxy client address may change. No fixed client-IP allowlist is required. Five credential failures in 600 seconds ban the source IP on enabled proxy ports for 3600 seconds. An IP ban affects all clients sharing that public NAT address.
+
+Inspect the jail without displaying credentials:
+
+```bash
+sudo fail2ban-client status familytraffic-proxy-auth
+```
+
+Use controlled clients in an isolated test environment for failure-to-ban tests. Do not trigger a ban from the active administrative source on a shared host.
