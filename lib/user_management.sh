@@ -878,6 +878,10 @@ apply_per_user_routing() {
 }
 
 reload_xray() {
+    validate_proxy_auth_config "$XRAY_CONFIG" || {
+        log_error 'Proxy authentication preflight failed; Xray activation refused'
+        return 1
+    }
     log_info "Reloading Xray configuration..."
 
     if ! docker ps --format '{{.Names}}' | grep -q "^${XRAY_CONTAINER}$"; then

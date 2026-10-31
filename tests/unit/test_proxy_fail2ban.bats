@@ -44,10 +44,11 @@ setup() {
 }
 
 @test "live verification rejects wrong monitoring thresholds and action ports" {
+    configure_proxy_auth_jail 1080,8118
     fail2ban-client() {
         case "$*" in
             '-t') return 0 ;;
-            '-d') echo "['add', 'familytraffic-proxy-auth', 'polling']" ;;
+            '-d') printf '%s\n' "['add', 'familytraffic-proxy-auth', 'polling']" "['set', 'familytraffic-proxy-auth', 'addfailregex', '^ FT_AUTH_FAILURE protocol=(?:http|socks)']" ;;
             'status familytraffic-proxy-auth') echo "File list: $FT_PROXY_AUTH_LOG" ;;
             'get familytraffic-proxy-auth maxretry') echo 5 ;;
             'get familytraffic-proxy-auth findtime') echo 600 ;;
@@ -73,4 +74,36 @@ setup() {
     validate_proxy_jail_ownership 1080,8118
     [ ! -e "$FT_FAIL2BAN_DIR/jail.d/familytraffic-proxy-auth.conf" ]
     [ ! -e "$FT_LOGROTATE_DIR/familytraffic-proxy-auth" ]
+}
+
+@test "live regex comparison rejects an appended never-match suffix" {
+    local dump="['set', 'familytraffic-proxy-auth', 'addfailregex', '^ FT_AUTH_FAILURE protocol=(?:http|socks) src=expected$']"
+    run _proxy_auth_live_regex_matches "$dump" '[0]: ^ FT_AUTH_FAILURE protocol=(?:http|socks) src=expected$NEVERMATCH'
+    [ "$status" -ne 0 ]
+    run _proxy_auth_live_regex_matches "$dump" '[0]: ^ FT_AUTH_FAILURE protocol=(?:http|socks) src=expected$'
+    [ "$status" -eq 0 ]
+}
+
+@test "UTC journal timestamps remain UTC on a non-UTC host and offsets are rejected" {
+    configure_proxy_auth_jail 1080,8118
+    run /usr/bin/python3 - "$FT_FAIL2BAN_DIR/filter.d/familytraffic-proxy-auth.conf" <<'PY'
+import configparser,datetime,os,sys,time
+from fail2ban.server.datetemplate import DatePatternRegex
+os.environ['TZ']='Europe/Moscow';time.tzset()
+config=configparser.ConfigParser();config.read(sys.argv[1])
+pattern=DatePatternRegex(config.get('Definition','datepattern'))
+line='2026-10-31T12:00:00Z FT_AUTH_FAILURE protocol=http src=192.0.2.10'
+expected=datetime.datetime(2026,10,31,12,tzinfo=datetime.timezone.utc).timestamp()
+assert pattern.getDate(line)[0]==expected
+assert pattern.getDate(line.replace('Z ','+0300 ')) is None
+PY
+    [ "$status" -eq 0 ]
+}
+
+@test "live regex comparison expands fail2ban address tags before exact comparison" {
+    local raw='^ FT_AUTH_FAILURE protocol=http src=<ADDR>$' expanded dump
+    expanded=$(/usr/bin/python3 -c 'import sys;from fail2ban.server.failregex import Regex;print(Regex(sys.argv[1],useDns="no").getRegex())' "$raw")
+    dump="['set', 'familytraffic-proxy-auth', 'addfailregex', '$raw']"
+    run _proxy_auth_live_regex_matches "$dump" "[0]: $expanded"
+    [ "$status" -eq 0 ]
 }

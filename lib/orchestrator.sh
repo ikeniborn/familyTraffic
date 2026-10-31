@@ -106,6 +106,10 @@ SHORT_ID=""
 # Returns: 0 on success, 1 on failure
 # =============================================================================
 orchestrate_installation() {
+    if [[ -f "$USERS_JSON" ]] && ! jq -e '.users | type == "array" and length == 0' "$USERS_JSON" >/dev/null 2>&1; then
+        echo 'Existing users detected. Use familytraffic-security reconcile with a prebuilt image instead of the fresh installer.' >&2
+        return 1
+    fi
     echo ""
     echo -e "${BLUE}╔══════════════════════════════════════════════════════════════╗${NC}"
     echo -e "${BLUE}║           INSTALLATION ORCHESTRATION                         ║${NC}"
@@ -166,16 +170,16 @@ orchestrate_installation() {
         return 1
     }
 
+    # Create users before proxy configuration so listeners never start anonymously.
+    create_users_json || return 1
+    if [[ "${ENABLE_PUBLIC_PROXY:-false}" == true ]]; then
+        provision_initial_proxy_user || return 1
+    fi
+
     # Step 4: Create Xray configuration (with optional proxy support)
     # v3.2: Use ENABLE_PUBLIC_PROXY to determine if proxy inbounds should be created
     create_xray_config "${ENABLE_PUBLIC_PROXY:-false}" || {
         echo -e "${RED}Failed to create Xray configuration${NC}" >&2
-        return 1
-    }
-
-    # Step 5: Create empty users.json
-    create_users_json || {
-        echo -e "${RED}Failed to create users.json${NC}" >&2
         return 1
     }
 
@@ -225,40 +229,13 @@ orchestrate_installation() {
     # Step 9: Docker network — SKIPPED (v5.33: single container uses network_mode: host)
     echo -e "${CYAN}[9/12] Docker network: skipped (single container, network_mode: host)${NC}"
 
-    # Step 9.5: Setup fail2ban (v3.3 - for all proxy modes: localhost + public)
-    if [[ "${ENABLE_PROXY:-false}" == "true" ]]; then
-        echo ""
-        echo -e "${CYAN}[9.5/12] Setting up fail2ban for proxy protection...${NC}"
-
-        # Source fail2ban module
-        if [[ -f "${SCRIPT_DIR}/lib/fail2ban_setup.sh" ]]; then
-            source "${SCRIPT_DIR}/lib/fail2ban_setup.sh"
-        fi
-
-        if ! setup_fail2ban_for_proxy; then
-            echo -e "${RED}Failed to setup fail2ban${NC}" >&2
-            echo -e "${YELLOW}WARNING: Proxy will be less secure without fail2ban protection${NC}"
-            echo -e "${YELLOW}Continue installation? [y/N]: ${NC}" >&2
-            read -r response
-            if [[ "${response,,}" != "y" && "${response,,}" != "yes" ]]; then
-                return 1
-            fi
-        fi
-    fi
+    # Configure the managed jail only through the image/configuration transaction below.
 
     # Step 10: Configure UFW firewall
     configure_ufw || {
         echo -e "${RED}Failed to configure UFW${NC}" >&2
         return 1
     }
-
-    # Step 10.5: Configure proxy firewall rules (v3.2 - conditional on ENABLE_PUBLIC_PROXY)
-    if [[ "${ENABLE_PUBLIC_PROXY:-false}" == "true" ]]; then
-        configure_proxy_firewall_rules || {
-            echo -e "${RED}Failed to configure proxy firewall rules${NC}" >&2
-            return 1
-        }
-    fi
 
     # Step 11: Set permissions (MUST run BEFORE deploy_containers!)
     # Docker mounts files with current permissions - changing them after won't affect running containers
@@ -651,6 +628,7 @@ EOF
 create_xray_config() {
     local enable_proxy="${1:-false}"
     local enable_tier2="${2:-false}"   # v5.30: Tier 2 transports (WS/XHTTP/gRPC) flag
+    local staged_config synced_config
     echo -e "${CYAN}[4/12] Creating Xray configuration...${NC}"
 
     # Validate required variables
@@ -674,7 +652,9 @@ create_xray_config() {
         _xray_access="/var/log/xray/access.log"
     fi
 
-    cat > "${XRAY_CONFIG}" <<EOF
+    staged_config=$(mktemp "${XRAY_CONFIG}.stage.XXXXXX") || return 1
+    chmod 600 "$staged_config" || return 1
+    cat > "$staged_config" <<EOF
 {
   "log": {
     "loglevel": "${_xray_loglevel}",
@@ -765,20 +745,17 @@ fi)],
 }
 EOF
 
-    if [[ ! -f "${XRAY_CONFIG}" ]]; then
+    if [[ ! -f "$staged_config" ]]; then
         echo -e "${RED}Failed to create ${XRAY_CONFIG}${NC}" >&2
         return 1
     fi
 
     # Validate JSON syntax
-    if ! jq empty "${XRAY_CONFIG}" 2>/dev/null; then
+    if ! jq empty "$staged_config" 2>/dev/null; then
+        rm -f "$staged_config"
         echo -e "${RED}Invalid JSON in ${XRAY_CONFIG}${NC}" >&2
         return 1
     fi
-
-    # Set permissions to 644 (readable by Xray container user: nobody)
-    chmod 644 "${XRAY_CONFIG}"
-    chown root:root "${XRAY_CONFIG}" 2>/dev/null || true
 
     echo "  ✓ Configuration file: ${XRAY_CONFIG}"
     echo "  ✓ Listen port: ${VLESS_PORT}"
@@ -818,12 +795,26 @@ EOF
     # Repopulate proxy accounts from users.json to prevent open proxy access.
     # xray HTTP inbound has no "auth" flag — empty accounts = no auth required.
     # This sync ensures accounts survive config regeneration (reinstall, setup).
-    if [[ "$enable_proxy" == "true" && -f "${USERS_JSON}" ]]; then
-        if ! declare -f rebuild_proxy_accounts_from_users_json >/dev/null 2>&1 || ! rebuild_proxy_accounts_from_users_json; then
+    if [[ "$enable_proxy" == true ]]; then
+        synced_config=$(mktemp "${XRAY_CONFIG}.accounts.XXXXXX") || { rm -f "$staged_config"; return 1; }
+        if ! jq --slurpfile users "$USERS_JSON" '
+            ($users[0].users | map(select(.proxy_password != null and .proxy_password != "") |
+                {user: .username, pass: .proxy_password})) as $accounts |
+            (.inbounds[] | select(.tag == "http-proxy" or .tag == "socks5-proxy") |
+                .settings.accounts) = $accounts
+        ' "$staged_config" > "$synced_config" || ! validate_proxy_auth_config "$synced_config"; then
+            rm -f "$staged_config" "$synced_config"
             echo 'Proxy account synchronization failed; public activation refused' >&2
             return 1
         fi
+        cat "$synced_config" > "$staged_config" || return 1
+        rm -f "$synced_config"
     fi
+    # Preserve existing bind-mount inodes. Publish only fully authenticated JSON.
+    cat "$staged_config" > "$XRAY_CONFIG" || { rm -f "$staged_config"; return 1; }
+    rm -f "$staged_config"
+    chmod 600 "$XRAY_CONFIG" || return 1
+    chown root:root "$XRAY_CONFIG" 2>/dev/null || true
 
     echo -e "${GREEN}✓ Xray configuration created${NC}"
     return 0
@@ -851,6 +842,27 @@ configure_proxy_firewall_rules() {
 }
 
 # =============================================================================
+# Provision one proxy account before the first public listener activation.
+provision_initial_proxy_user() {
+    if jq -e '.users | any(.proxy_password != null and .proxy_password != "")' "$USERS_JSON" >/dev/null; then
+        return 0
+    fi
+    local username="${FT_INITIAL_PROXY_USERNAME:-}"
+    if [[ -z "$username" ]]; then
+        [[ -t 0 ]] || { echo 'Set FT_INITIAL_PROXY_USERNAME for first-install proxy provisioning' >&2; return 1; }
+        read -r -p 'Initial proxy username (3-32 letters, digits, underscores, or dashes): ' username
+    fi
+    (
+        source "$SCRIPT_DIR_LIB/user_management.sh"
+        validate_username "$username" || exit 1
+        local password
+        password=$(generate_proxy_password) || exit 1
+        add_user_to_json "$username" "" "$password" "" chrome "" proxy || exit 1
+    ) || return 1
+    echo "Initial proxy account saved securely. After installation, use: familytraffic show-user $username"
+}
+
+# =============================================================================
 # FUNCTION: create_users_json
 # =============================================================================
 # Description: Create empty users.json file
@@ -859,7 +871,12 @@ configure_proxy_firewall_rules() {
 create_users_json() {
     echo -e "${CYAN}[5/12] Creating users database...${NC}"
 
-    # Create empty users JSON structure
+    if [[ -e "$USERS_JSON" ]]; then
+        jq -e '.users | type == "array"' "$USERS_JSON" >/dev/null || return 1
+        echo 'Existing users database preserved.'
+        return 0
+    fi
+    # Create empty users JSON structure.
     cat > "${USERS_JSON}" <<'EOF'
 {
   "users": [],
@@ -1403,7 +1420,7 @@ deploy_containers() {
         return 1
     }
 
-    # Pull images
+    # Pull a prebuilt image. Reconciliation itself never pulls or builds.
     echo "  Pulling Docker images..."
     docker compose pull || {
         echo -e "${RED}Failed to pull Docker images${NC}" >&2
@@ -1411,12 +1428,17 @@ deploy_containers() {
     }
     echo "  ✓ Images pulled"
 
-    # Start containers
-    echo "  Starting containers..."
-    docker compose up -d || {
-        echo -e "${RED}Failed to start containers${NC}" >&2
-        return 1
-    }
+    if [[ "${ENABLE_PUBLIC_PROXY:-false}" == true ]]; then
+        source "$SCRIPT_DIR_LIB/fail2ban_setup.sh"
+        check_fail2ban_installed || install_fail2ban || return 1
+        source "$SCRIPT_DIR_LIB/../scripts/familytraffic-security"
+        local selected_image selected_id
+        selected_image=$(docker compose config --format json | jq -er '.services.familytraffic.image') || return 1
+        selected_id=$(docker image inspect --format '{{.Id}}' "$selected_image") || return 1
+        security_reconcile "$selected_id" || return 1
+    else
+        docker compose up -d --no-build || return 1
+    fi
 
     # Wait for containers to be healthy
     echo "  Waiting for containers to start..."
@@ -1499,6 +1521,10 @@ install_cli_tools() {
         echo -e "${RED}Failed to create symlink${NC}" >&2
         return 1
     }
+
+    cp "$project_root/scripts/familytraffic-security" "$SCRIPTS_DIR/familytraffic-security" || return 1
+    chmod 755 "$SCRIPTS_DIR/familytraffic-security" || return 1
+    ln -sf "$SCRIPTS_DIR/familytraffic-security" /usr/local/sbin/familytraffic-security || return 1
 
     # v5.23: Install familytraffic-external-proxy CLI tool
     local external_proxy_cli_source="${project_root}/scripts/familytraffic-external-proxy"
@@ -1737,7 +1763,10 @@ set_permissions() {
     fi
 
     # Readable files: 644
-    find "${LOGS_DIR}" -type f -exec chmod 644 {} \; 2>/dev/null || true
+    find "${LOGS_DIR}" -type f ! -name auth.log -exec chmod 644 {} \; 2>/dev/null || true
+    if [[ -f "$LOGS_DIR/xray/auth.log" ]]; then
+        chmod 600 "$LOGS_DIR/xray/auth.log" || return 1
+    fi
     chmod 644 "${DOCKER_COMPOSE_FILE}" 2>/dev/null || true
     chmod 644 "${NGINX_CONFIG}" 2>/dev/null || true
 
