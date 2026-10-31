@@ -76,7 +76,7 @@ jobs:
       - name: Install bats
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y bats
+          sudo apt-get install -y bats fail2ban
 
       - name: Report version
         run: bats --version
@@ -112,7 +112,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install migration test dependency
-        run: sudo apt-get update && sudo apt-get install -y bats
+        run: sudo apt-get update && sudo apt-get install -y bats fail2ban
       - name: Build reviewed application image
         run: docker build -f docker/familytraffic/Dockerfile -t familytraffic:proxy-security .
       - name: Run real proxy firewall and authentication scenarios
