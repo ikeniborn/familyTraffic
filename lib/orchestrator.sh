@@ -443,35 +443,13 @@ generate_short_id() {
 # Note: NO per-user IP filtering (user field doesn't work for HTTP/SOCKS5)
 # =============================================================================
 generate_routing_json() {
-    local proxy_ips_file="/opt/familytraffic/config/proxy_allowed_ips.json"
-    local allowed_ips='["127.0.0.1"]'  # Default: localhost only
-    local docker_subnet=""
-
-    # v5.30: familytraffic_nginx (stream block) connects to Xray via Docker network (not localhost)
-    # Ports 10800/18118 NOT exposed to host — Docker network provides isolation
-
-    # Check if proxy_allowed_ips.json exists (user-defined overrides)
-    if [[ -f "$proxy_ips_file" ]]; then
-        # Read allowed IPs from file
-        local user_ips=$(jq -c '.allowed_ips' "$proxy_ips_file" 2>/dev/null)
-
-        # Validate JSON and use if valid
-        if [[ -n "$user_ips" ]] && [[ "$user_ips" != "null" ]] && echo "$user_ips" | jq empty 2>/dev/null; then
-            allowed_ips="$user_ips"
-        else
-            # Fallback to defaults if file is corrupted (v4.3: localhost only)
-            allowed_ips='["127.0.0.1"]'
-        fi
+    local proxy_ips_file="${VLESS_DIR:-/opt/familytraffic}/config/proxy_allowed_ips.json"
+    if [[ -f "$proxy_ips_file" ]] && ! jq -e '.allowed_ips == ["127.0.0.1"]' "$proxy_ips_file" >/dev/null 2>&1; then
+        echo 'Custom proxy source restriction requires review before PROXY migration' >&2
+        return 1
     fi
 
-    # Generate routing configuration with server-level IP whitelist
-    # v5.30+ Nginx Architecture: Blocking rule removed because:
-    #   - Ports 10800/18118 NOT exposed publicly (Nginx terminates TLS on 1080/8118)
-    #   - Docker network provides isolation
-    #   - familytraffic_nginx connects from Docker network IP (not whitelisted 127.0.0.1)
-    #   - Blocking rule would break Nginx → Xray proxy connections
-    # Rule 1: Allow whitelisted IPs to access proxy ports (legacy, kept for future use)
-    # v5.31: Changed to AsIs for mobile network compatibility
+    # Private receivers authenticate clients; forwarded source IPs are no longer loopback.
     cat <<EOF
 ,
   "routing": {
@@ -480,7 +458,6 @@ generate_routing_json() {
       {
         "type": "field",
         "inboundTag": ["socks5-proxy", "http-proxy"],
-        "source": ${allowed_ips},
         "outboundTag": "direct"
       }
     ]
@@ -519,6 +496,7 @@ generate_socks5_inbound_json() {
       "udp": false,
       "ip": "0.0.0.0"
     },
+    "streamSettings": {"sockopt": {"acceptProxyProtocol": true}},
     "sniffing": {
       "enabled": true,
       "destOverride": ["http", "tls"]
@@ -557,6 +535,7 @@ generate_http_inbound_json() {
       "allowTransparent": false,
       "userLevel": 0
     },
+    "streamSettings": {"sockopt": {"acceptProxyProtocol": true}},
     "sniffing": {
       "enabled": true,
       "destOverride": ["http", "tls"]
@@ -682,6 +661,11 @@ create_xray_config() {
         return 1
     fi
 
+    local proxy_routing_json=""
+    if [[ "$enable_proxy" == true ]]; then
+        proxy_routing_json=$(generate_routing_json) || return 1
+    fi
+
     # Create Xray configuration
     local _xray_loglevel="warning"
     local _xray_access=""
@@ -762,9 +746,7 @@ fi)],
       "protocol": "blackhole",
       "tag": "blocked"
     }
-  ]$(if [[ "$enable_proxy" == "true" ]]; then
-    generate_routing_json
-fi),
+  ]${proxy_routing_json},
   "policy": {
     "levels": {
       "0": {
@@ -836,8 +818,11 @@ EOF
     # Repopulate proxy accounts from users.json to prevent open proxy access.
     # xray HTTP inbound has no "auth" flag — empty accounts = no auth required.
     # This sync ensures accounts survive config regeneration (reinstall, setup).
-    if [[ "$enable_proxy" == "true" ]] && declare -f rebuild_proxy_accounts_from_users_json >/dev/null 2>&1; then
-        rebuild_proxy_accounts_from_users_json || log_warning "Proxy accounts rebuild failed (non-critical, re-run 'familytraffic setup' if proxy auth is broken)"
+    if [[ "$enable_proxy" == "true" && -f "${USERS_JSON}" ]]; then
+        if ! declare -f rebuild_proxy_accounts_from_users_json >/dev/null 2>&1 || ! rebuild_proxy_accounts_from_users_json; then
+            echo 'Proxy account synchronization failed; public activation refused' >&2
+            return 1
+        fi
     fi
 
     echo -e "${GREEN}✓ Xray configuration created${NC}"
@@ -1451,6 +1436,10 @@ EOF
 # Returns: 0 on success, 1 on failure
 # =============================================================================
 deploy_containers() {
+    if ! validate_proxy_auth_config "${XRAY_CONFIG}"; then
+        echo 'Public activation refused. Provision proxy users and synchronize accounts before starting containers.' >&2
+        return 1
+    fi
     echo -e "${CYAN}[13/14] Deploying Docker containers...${NC}"
 
     # Pre-flight checks: Verify critical files exist before starting containers

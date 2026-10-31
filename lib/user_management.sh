@@ -52,6 +52,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # "export: write_preserving_inode: not a function".
 # shellcheck source=lib/common.sh
 source "${SCRIPT_DIR}/common.sh"
+source "${SCRIPT_DIR}/proxy_security.sh"
 
 # Source QR generator module for client configuration export
 if [[ -f "${SCRIPT_DIR}/qr_generator.sh" ]]; then
@@ -1127,11 +1128,6 @@ update_proxy_accounts() {
 # Returns: 0 on success, 1 on failure
 # =============================================================================
 rebuild_proxy_accounts_from_users_json() {
-    if [[ ! -f "${USERS_JSON}" ]]; then
-        log_info "users.json not found, skipping proxy accounts rebuild"
-        return 0
-    fi
-
     if ! jq -e '.inbounds[] | select(.tag == "socks5-proxy")' "${XRAY_CONFIG}" >/dev/null 2>&1; then
         log_info "Proxy inbounds not in config, skipping accounts rebuild"
         return 0
@@ -1141,7 +1137,10 @@ rebuild_proxy_accounts_from_users_json() {
     proxy_accounts=$(jq '[.users[]
         | select(.proxy_password != null and .proxy_password != "")
         | {user: .username, pass: .proxy_password}
-    ]' "${USERS_JSON}" 2>/dev/null || echo "[]")
+    ]' "${USERS_JSON}" 2>/dev/null) || {
+        log_error "Cannot read users for proxy account synchronization"
+        return 1
+    }
 
     local tmp
     tmp=$(mktemp)
@@ -1153,7 +1152,11 @@ rebuild_proxy_accounts_from_users_json() {
         log_error "Failed to rebuild proxy accounts from users.json"
         return 1
     fi
-    write_preserving_inode "$tmp" "${XRAY_CONFIG}"
+    if ! validate_proxy_auth_config "$tmp"; then
+        rm -f "$tmp"
+        return 1
+    fi
+    write_preserving_inode "$tmp" "${XRAY_CONFIG}" || return 1
 
     local count
     count=$(echo "$proxy_accounts" | jq 'length')

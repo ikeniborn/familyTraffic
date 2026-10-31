@@ -129,6 +129,7 @@ fi)
         ssl_certificate_key ${cert_path}/privkey.pem;
         ssl_protocols       TLSv1.3;
         proxy_pass          127.0.0.1:10800;
+        proxy_protocol on;
         proxy_connect_timeout 10s;
         proxy_timeout        300s;
     }
@@ -143,6 +144,7 @@ fi)
         ssl_certificate_key ${cert_path}/privkey.pem;
         ssl_protocols       TLSv1.3;
         proxy_pass          127.0.0.1:18118;
+        proxy_protocol on;
         proxy_connect_timeout 10s;
         proxy_timeout        300s;
     }
@@ -155,6 +157,7 @@ cat <<'NOTLS_BLOCK'
     server {
         listen 1081;
         proxy_pass 127.0.0.1:10800;
+        proxy_protocol on;
         proxy_connect_timeout 10s;
         proxy_timeout 300s;
     }
@@ -165,6 +168,7 @@ cat <<'NOTLS_BLOCK'
     server {
         listen 8119;
         proxy_pass 127.0.0.1:18118;
+        proxy_protocol on;
         proxy_connect_timeout 10s;
         proxy_timeout 300s;
     }
