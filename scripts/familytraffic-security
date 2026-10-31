@@ -1,6 +1,19 @@
 #!/usr/bin/env bash
 # Coordinate the patched image, trusted receivers, and managed host policy.
 
+security_reset_transaction() {
+    SECURITY_WORK=''
+    SECURITY_BACKUP_READY=false
+    SECURITY_STOPPED=false
+    SECURITY_POLICY_STARTED=false
+    SECURITY_LOG_MISSING=false
+    SECURITY_KEEP_BACKUP=false
+    SECURITY_BACKUP_PATHS=()
+}
+
+# Internal cleanup paths and lifecycle flags must never come from the environment.
+security_reset_transaction
+
 security_paths() {
     local script
     script=$(readlink -f "${BASH_SOURCE[0]}") || return 1
@@ -71,6 +84,7 @@ security_check() {
 
 security_reconcile() {
     local image="$1"
+    security_reset_transaction
     if [[ ! "$image" =~ ^sha256:[a-f0-9]{64}$ && ! "$image" =~ ^[^[:space:]@]+@sha256:[a-f0-9]{64}$ ]]; then
         echo 'Require a locally available immutable image ID or repository digest' >&2
         return 1

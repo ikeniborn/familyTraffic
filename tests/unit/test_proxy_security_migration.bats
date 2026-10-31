@@ -306,3 +306,14 @@ MOCK
     [ "$status" -eq 0 ]
     [[ "$output" != *secret-fixture-value* ]]
 }
+
+@test "failed preflight cannot delete an inherited transaction workspace" {
+    source "$PROJECT_ROOT/scripts/familytraffic-security"
+    SECURITY_WORK="$BATS_TEST_TMPDIR/protected"
+    mkdir "$SECURITY_WORK"
+    printf durable-fixture > "$SECURITY_WORK/state"
+    security_preflight() { return 1; }
+    run security_reconcile "sha256:$(printf '%064d' 1)"
+    [ "$status" -ne 0 ]
+    [ "$(cat "$BATS_TEST_TMPDIR/protected/state")" = durable-fixture ]
+}
