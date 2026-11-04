@@ -1,0 +1,110 @@
+{
+  "topic": "development-branch-integration",
+  "verification_revision": "caca1e2e63c69e843e2ae10490436771eb533848",
+  "included_refs": [
+    {
+      "ref": "refs/heads/dev-acme-installer-function-fix",
+      "sha": "6ea57d54304fabeb67df5ccc2b52a2e5b053fc63",
+      "included": true
+    },
+    {
+      "ref": "refs/heads/dev-build-context-docs-fix",
+      "sha": "3cc03acd6c6baf7db386dadd68cc523b64d937b6",
+      "included": true
+    },
+    {
+      "ref": "refs/heads/dev-development-branch-integration",
+      "sha": "caca1e2e63c69e843e2ae10490436771eb533848",
+      "included": true
+    },
+    {
+      "ref": "refs/heads/dev-installer-runtime-fixes",
+      "sha": "819b248e954172a1036b20901c12d9734f75dfa9",
+      "included": true
+    },
+    {
+      "ref": "refs/heads/dev-last-proxy-user-removal-safety",
+      "sha": "1a0c074a1e5fd6fc811c458dceeaa67c4192ed78",
+      "included": true
+    },
+    {
+      "ref": "refs/heads/dev-proxy-ban-allowlist",
+      "sha": "e704c4ccc2c93a1405f82ac643ee4c68337123c1",
+      "included": true
+    },
+    {
+      "ref": "refs/heads/dev-proxy-deployment-security",
+      "sha": "b18dc2f68d28c8c264ef527e3e0a83be1a5e6cb3",
+      "included": true
+    },
+    {
+      "ref": "refs/remotes/origin/dev-acme-installer-function-fix",
+      "sha": "6ea57d54304fabeb67df5ccc2b52a2e5b053fc63",
+      "included": true
+    },
+    {
+      "ref": "refs/remotes/origin/dev-alpine-expat-abi-fix",
+      "sha": "f07868942f3517c7ac51b6a9a29da6f01f4b4f34",
+      "included": true
+    },
+    {
+      "ref": "refs/remotes/origin/dev-build-context-docs-fix",
+      "sha": "3cc03acd6c6baf7db386dadd68cc523b64d937b6",
+      "included": true
+    },
+    {
+      "ref": "refs/remotes/origin/dev-installer-runtime-fixes",
+      "sha": "819b248e954172a1036b20901c12d9734f75dfa9",
+      "included": true
+    },
+    {
+      "ref": "refs/remotes/origin/dev-last-proxy-user-removal-safety",
+      "sha": "1a0c074a1e5fd6fc811c458dceeaa67c4192ed78",
+      "included": true
+    },
+    {
+      "ref": "refs/remotes/origin/dev-proxy-ban-allowlist",
+      "sha": "e704c4ccc2c93a1405f82ac643ee4c68337123c1",
+      "included": true
+    },
+    {
+      "ref": "refs/remotes/origin/dev-proxy-deployment-security",
+      "sha": "b18dc2f68d28c8c264ef527e3e0a83be1a5e6cb3",
+      "included": true
+    }
+  ],
+  "source_sha256": {
+    "lib/user_management.sh": "c42a3ca6b7235c4eee580654c73507476f1a7c265f4904040de779213c0a5172",
+    "lib/fail2ban_setup.sh": "6539c0809e76adf284cfa4c9c3a9daf9611b493ff2bcf6e4fc1f765e10d50d22",
+    "tests/unit/test_proxy_fail2ban.bats": "9b46db933a6715d7229f261973b03ab1aed960ac27e67e832c57252d2055fb41",
+    "tests/unit/test_user_removal_safety.bats": "78116755846ef50482cd3ff570fef5cee42bd86057ccad475ca5992b258774b3"
+  },
+  "checks": {
+    "unit_passed": 129,
+    "unit_skipped": 2,
+    "unit_exit": 0,
+    "shell_syntax_exit": 0,
+    "shellcheck_findings": 191,
+    "shellcheck_errors": 0,
+    "shellcheck_exit": 0,
+    "independent_review": "No important defects; all development tips included, both conflict-side tests retained, fixture digest verified."
+  },
+  "vless_checks": [
+    {
+      "transport": "VLESS reality",
+      "target": "https://example.com",
+      "curl_exit": 0,
+      "http_status": "200"
+    },
+    {
+      "transport": "VLESS reality",
+      "target": "https://api.ipify.org",
+      "curl_exit": 0,
+      "http_status": "200",
+      "egress_ip": "82.38.64.171"
+    }
+  ],
+  "vless_method": "Disposable local Xray client, loopback-only SOCKS port, supplied URI kept in a private temporary directory; normal target TLS validation; client container and config removed.",
+  "server_state": "Proxy jail allowlist configured and verified for the approved client address. Removal code deployment remains user-owned.",
+  "delivery": "Integrate into test first, then master; delete dev refs and their clean worktrees only after ancestry verification."
+}

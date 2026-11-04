@@ -28,13 +28,82 @@
   "durable_lifecycle": "completion-pending",
   "implementation_head": "1a46e28876fe3d700e164639f14812824bdbbfa6",
   "independent_integration_review": "No remaining blocking findings in changed source after scoped corrections.",
+  "live_deployment": {
+    "backup": "/opt/familytraffic/backups/security-rollout-20261031T192211Z",
+    "external_checks": [
+      {
+        "exit_status": 0,
+        "http_status": "200",
+        "name": "http.txt",
+        "passed": true
+      },
+      {
+        "exit_status": 0,
+        "http_status": "200",
+        "name": "https.txt",
+        "passed": true
+      },
+      {
+        "exit_status": 0,
+        "http_status": "200",
+        "name": "soks5.txt",
+        "passed": true
+      },
+      {
+        "exit_status": 0,
+        "http_status": "200",
+        "name": "soks5s.txt",
+        "passed": true
+      },
+      {
+        "exit_status": 0,
+        "http_status": "200",
+        "name": "vless-reality",
+        "passed": true
+      }
+    ],
+    "fail2ban_status": "Status for the jail: familytraffic-proxy-auth\n|- Filter\n|  |- Currently failed:\t0\n|  |- Total failed:\t0\n|  `- File list:\t/opt/familytraffic/logs/xray/auth.log\n`- Actions\n   |- Currently banned:\t0\n   |- Total banned:\t1\n   `- Banned IP list:\t\n",
+    "familybudget_changed": false,
+    "health": "healthy",
+    "host": "ikeniborndev",
+    "image": "sha256:fedff6c03d1dfe5ec9d4f67cd9fb582c61c47b8cc483a617870bcbc7b360f9ab",
+    "journal_mode": "0o600",
+    "legacy_variant_reviewed_sha256": "18b6c73aac5e1d0dbb72da11e279eb5f3e30adb23021aa3c0a82f26a97c5b037",
+    "log_bind": [
+      {
+        "destination": "/var/log/xray",
+        "rw": true,
+        "source": "/opt/familytraffic/logs/xray"
+      }
+    ],
+    "occurred_at": "2026-10-31T19:24:29.917741+00:00",
+    "ports": "Status: active\n\nTo                         Action      From\n--                         ------      ----\n22/tcp                     ALLOW       Anywhere                   # SSH\n1080/tcp                   ALLOW       Anywhere                   # familyTraffic authenticated proxy\n8118/tcp                   ALLOW       Anywhere                   # familyTraffic authenticated proxy\n443/tcp                    ALLOW       Anywhere                   # VLESS Reality + SNI routing\n80/tcp                     ALLOW       Anywhere                   # familyTraffic ACME HTTP-01\n1081/tcp                   ALLOW       Anywhere                   # familyTraffic authenticated proxy\n8119/tcp                   ALLOW       Anywhere                   # familyTraffic HTTP proxy no-TLS\n\n",
+    "reconcile_exit_status": 0,
+    "reserved_ip_action_smoke": {
+      "address": "192.0.2.123",
+      "ban_then_unban": true,
+      "jump_precedes_ufw": true
+    },
+    "server_build_performed": false,
+    "source_hashes": {
+      "config/nginx/nginx.conf": "e5ce00e4b72a01aec8eef35be5d04b4b1fbac9f04011b19fa743537797943a04",
+      "config/xray_config.json": "74e2882c38d0912bed71c7d62f41c28cb2ad584a93f648c13f845cf4f1ba85e7",
+      "lib/fail2ban_setup.sh": "edbb1c87f78510f3fea733cdbb823dd98f44fd6c08983427d88920523d8dd48c",
+      "lib/proxy_security.sh": "aa0cb3d01b4fce487cafc1a76c5a81840dc6b373233c3e1ce47e961ca4254914",
+      "scripts/familytraffic-security": "0fc32db82360a5114fd2520fbe1a30334abe57ddbc11188b8d13443a6675734d"
+    },
+    "standalone_check_exit_status": 0,
+    "user_db_sha256": "3632ef4bc098b0f1425ae1092404ce645dbe1a9de468e0f7d49e96121edcc256",
+    "users_preserved": true
+  },
   "repository": "familyTraffic",
   "result_check": {
     "plan_hash": "82ee21c6ff6126b1",
     "source": "plan",
     "verdict": "OK"
   },
-  "scope": "Approved installation and deployment security changes; no host rollout of the new mechanism.",
+  "rollout_source_head": "6ca677ebed9832cd9251c357eab0c1cdf044fec7",
+  "scope": "Installation/deployment security implementation and user-authorized rollout on ikeniborndev.",
   "security_verification": {
     "lint": {
       "command": "bash tests/lint.sh",
@@ -69,7 +138,7 @@
     "unit": {
       "command": "bats --print-output-on-failure tests/unit/",
       "exit_status": 0,
-      "passed": 108,
+      "passed": 109,
       "skipped": 2
     },
     "upstream_go": {

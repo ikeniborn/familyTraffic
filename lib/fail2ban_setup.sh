@@ -471,7 +471,7 @@ _configure_proxy_auth_jail() {
         elif grep -Eq '^\[(vless-http|vless-socks5|familytraffic-(proxy-auth|socks5|http)(-notls)?)\]' "$file"; then
             digest=$(sha256sum "$file"); digest="${digest%% *}"
             case "$digest" in
-                c0d29d92e1a9fba923d020dfc75d406c92443809e743c900d233943cfb8e968f|909749e197e8ad03e0fa98ed04aafa5cac0596017bb013bfc3a41c29e76abc67) legacy+=("$file") ;;
+                c0d29d92e1a9fba923d020dfc75d406c92443809e743c900d233943cfb8e968f|909749e197e8ad03e0fa98ed04aafa5cac0596017bb013bfc3a41c29e76abc67|18b6c73aac5e1d0dbb72da11e279eb5f3e30adb23021aa3c0a82f26a97c5b037) legacy+=("$file") ;;
                 *) echo "Unrecognized legacy proxy jail requires review: $file" >&2; return 1 ;;
             esac
         fi

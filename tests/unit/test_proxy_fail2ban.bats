@@ -126,3 +126,15 @@ PY
     run _proxy_auth_ignoreip_matches "$missing" '192.0.2.17'
     [ "$status" -ne 0 ]
 }
+
+@test "reviewed legacy v3.2 jail is retired but customized variant is rejected" {
+    cp "$PROJECT_ROOT/tests/fixtures/legacy-vless-proxy.conf" "$FT_FAIL2BAN_DIR/jail.d/vless-proxy.conf"
+    run configure_proxy_auth_jail 1080,8118
+    [ "$status" -eq 0 ]
+    [ -f "$FT_FAIL2BAN_DIR/jail.d/vless-proxy.conf.disabled" ]
+    cp "$PROJECT_ROOT/tests/fixtures/legacy-vless-proxy.conf" "$FT_FAIL2BAN_DIR/jail.d/vless-proxy.conf"
+    printf '\n# operator customization\n' >> "$FT_FAIL2BAN_DIR/jail.d/vless-proxy.conf"
+    run configure_proxy_auth_jail 1080,8118
+    [ "$status" -eq 1 ]
+    [ -f "$FT_FAIL2BAN_DIR/jail.d/vless-proxy.conf" ]
+}
