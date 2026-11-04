@@ -101,3 +101,20 @@ setup() {
     [[ "$output" == *"UFW must be active before installing public proxies"* ]]
     [[ "$output" != *"certificate-stage-reached"* ]]
 }
+
+@test "CLI installation finds repository sources after deployment changes directory" {
+    run bash -c '
+        set -euo pipefail
+        source "$1/lib/common.sh"
+        cd "$1"
+        source lib/orchestrator.sh
+        cd "$2"
+        # Capture the first CLI copy without writing installation paths.
+        cp() { command cp "$1" "$capture"; return 1; }
+        capture="$2/copied-cli"
+        if install_cli_tools; then exit 42; fi
+        cmp "$1/scripts/familytraffic" "$capture"
+    ' _ "$PROJECT_ROOT" "$BATS_TEST_TMPDIR"
+    echo "$output"
+    [ "$status" -eq 0 ]
+}

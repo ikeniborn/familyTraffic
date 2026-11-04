@@ -1502,7 +1502,7 @@ install_cli_tools() {
     echo -e "${CYAN}[14/14] Installing CLI tools...${NC}"
 
     # Get the project root (assuming script is in lib/ subdirectory)
-    local project_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+    local project_root="$(cd "${SCRIPT_DIR_LIB}/.." && pwd)"
     local cli_source="${project_root}/scripts/familytraffic"
 
     # Check if CLI script exists in project
