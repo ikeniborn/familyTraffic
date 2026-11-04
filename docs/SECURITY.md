@@ -160,3 +160,15 @@ Handshake:
 ---
 
 *Аудит проведён Claude Code, 2026-04-16. Все временные файлы (pcap, копии ключей) удалены с сервера по завершении тестов.*
+
+## Proxy credential failure detection
+
+The proxy security design uses a patched, pinned Xray build and a dedicated authentication journal. nginx sends the TCP peer address to loopback proxy receivers through PROXY protocol. Public listeners do not trust incoming source metadata. The Reality path does not use this mechanism.
+
+`/opt/familytraffic/logs/xray/auth.log` contains only UTC timestamps, fixed event identifiers, protocol labels, and numeric client IP addresses. It must not contain usernames, passwords, authorization headers, destinations, or arbitrary client text. The writer creates the journal with mode 0600 and opens it per event so rename rotation remains safe. General error and access logs are not ban sources.
+
+Only a parsed wrong-credential attempt counts. HTTP authentication challenges, malformed requests, timeouts, and destination failures do not count as wrong passwords. Broad rejection-pattern filters can ban legitimate clients and are not supported.
+
+The managed jail uses a file backend, numeric addresses, and a strict event grammar. Loopback is excluded. SSH and Reality remain outside this proxy jail. Validate source attribution, log-injection resistance, fifth-failure blocking, expiry, rotation, restart, firewall reload, and a second client's access in the isolated acceptance lab.
+
+IP-based protection cannot distinguish multiple users behind the same NAT. A changed public IP is handled as a new source, without a configuration change. This mechanism complements strong credentials; it does not replace authentication or provide account-level blocking.

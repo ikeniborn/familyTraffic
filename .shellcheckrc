@@ -1,0 +1,15 @@
+# ShellCheck configuration for familyTraffic
+# Used by `make lint`, the CI lint job, and any local `shellcheck` run.
+
+# Follow `source` directives so cross-module checks work.
+external-sources=true
+
+# SC1090/SC1091 — "cannot follow non-constant source" / "file not specified as input".
+# Every module here is sourced through a runtime-computed path such as
+# "${SCRIPT_DIR}/foo.sh", which ShellCheck cannot resolve statically. Nothing to fix.
+disable=SC1090,SC1091
+
+# SC2317 — "command appears to be unreachable".
+# Fires on every function body in a library that is sourced rather than executed,
+# because ShellCheck sees no local caller. All 40 occurrences were false positives.
+disable=SC2317

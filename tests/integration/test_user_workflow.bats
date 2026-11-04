@@ -9,7 +9,7 @@ setup() {
 
     # Source required modules
     source "${LIB_DIR}/logger.sh"
-    source "${LIB_DIR}/validation.sh"
+    source "${LIB_DIR}/common.sh"
 
     # Create mock installation
     export INSTALL_DIR="$MOCK_INSTALL_DIR"
@@ -52,11 +52,11 @@ teardown() {
     run create_user "$username"
     [ "$status" -eq 0 ]
 
-    # Verify UUID format
+    # Verify UUID format. There is no validate_uuid in this repository — UUIDs are
+    # generated, never parsed from input — so the shape is asserted directly.
     local uuid
     uuid=$(jq -r ".users[] | select(.username == \"$username\") | .uuid" "${DATA_DIR}/users.json")
-    run validate_uuid "$uuid"
-    [ "$status" -eq 0 ]
+    [[ "$uuid" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]]
 }
 
 @test "create user creates client directory" {

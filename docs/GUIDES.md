@@ -550,3 +550,48 @@ cd /opt/familytraffic && docker compose pull && docker compose up -d
 ```bash
 docker manifest inspect ghcr.io/<owner>/familytraffic:1.1.4
 ```
+
+## Proxy authentication protection
+
+Public proxy ports use UFW ALLOW rules. TCP connection frequency is not an authentication signal. The dedicated `familytraffic-proxy-auth` jail counts credential mismatches instead. Existing project-managed LIMIT rules are reconciled during the security migration. Custom source restrictions require operator review.
+
+Check the effective configuration after installation or an image-only update:
+
+```bash
+sudo familytraffic-security check
+```
+
+A nonzero result means protection has not been verified. Resolve the diagnostic before treating deployment as successful. General process health alone does not prove authentication, source attribution, or bans.
+
+The proxy client address may change. No fixed client-IP allowlist is required. Five credential failures in 600 seconds ban the source IP on enabled proxy ports for 3600 seconds. An IP ban affects all clients sharing that public NAT address.
+
+Inspect the jail without displaying credentials:
+
+```bash
+sudo fail2ban-client status familytraffic-proxy-auth
+```
+
+Use controlled clients in an isolated test environment for failure-to-ban tests. Do not trigger a ban from the active administrative source on a shared host.
+
+## Interrupted installation before CLI setup
+
+The installer loads `common.sh` before orchestration. User-management imports use
+`USER_MANAGEMENT_LIB_DIR` and preserve the installer's readonly `SCRIPT_DIR`.
+Users database and proxy whitelist initialization stop if timestamp persistence fails.
+
+If installation stops before CLI setup, `familytraffic` is not installed yet.
+Do not use `add-user` to resume an incomplete installation. Preserve the incomplete
+`/opt/familytraffic` directory before starting a fresh installation. Do not move an
+active deployment: use `familytraffic-security reconcile` for existing deployments.
+
+If sudo reports `unable to resolve host`, check that `/etc/hosts` contains the
+hostname from `/etc/hostname`. This host configuration is separate from CLI setup.
+
+Public proxy installation requires active UFW protection. The installer checks
+this prerequisite after parameter collection, before certificates and deployment
+files are created. Allow the server's actual SSH port before enabling UFW, then
+retry installation. Reloading an inactive UFW does not activate it.
+
+The proxy security transaction also requires an image with authentication-journal
+support. Older `latest` images fail capability validation. Release `1.2.1` rebuilds
+the current image through the `test` branch pipeline; do not bypass this check.

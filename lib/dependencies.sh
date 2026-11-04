@@ -57,7 +57,8 @@ declare -ga OPTIONAL_PACKAGES
 
 # Minimum version requirements
 readonly DOCKER_MIN_VERSION="20.10"
-readonly DOCKER_COMPOSE_MIN_VERSION="1.29"
+readonly DOCKER_COMPOSE_MIN_VERSION="1.29"    # standalone v1, fallback only
+readonly DOCKER_COMPOSE_V2_MIN_VERSION="2.0"  # docker compose plugin, preferred
 readonly JQ_MIN_VERSION="1.5"
 
 # Color codes (inherited from os_detection.sh but redefined for standalone use if needed)
@@ -1447,30 +1448,44 @@ validate_docker() {
     echo ""
 
     # -------------------------------------------------------------------------
-    # CHECK 6: docker-compose Version >= 1.29
+    # CHECK 6: Compose availability
+    #
+    # The v2 plugin (`docker compose`) is what the CLI and docker-compose.yml
+    # actually use, and docker-compose-plugin is the package this installer
+    # requests. The standalone v1 binary is only a fallback for hosts where the
+    # plugin is unavailable, so it is accepted but not required — demanding it
+    # used to abort installation on any host that had nothing but the plugin.
     # -------------------------------------------------------------------------
-    echo -e "${CYAN}[6/6] Checking docker-compose version...${NC}"
+    echo -e "${CYAN}[6/6] Checking Docker Compose...${NC}"
 
-    if ! command -v docker-compose &>/dev/null; then
-        echo -e "${RED}  ${CROSS_MARK} docker-compose command not found${NC}"
-        failed_checks+=("docker-compose not installed")
-        ((failed_count++)) || true
-    else
-        local compose_version
+    local compose_version=""
+
+    if docker compose version &>/dev/null; then
+        compose_version=$(docker compose version 2>/dev/null | grep -oP '\d+\.\d+\.\d+' | head -n1)
+
+        if [[ -n "$compose_version" ]] && version_compare "$compose_version" "$DOCKER_COMPOSE_V2_MIN_VERSION"; then
+            echo -e "${GREEN}  ${CHECK_MARK} docker compose (v2 plugin) version: $compose_version${NC}"
+        else
+            echo -e "${RED}  ${CROSS_MARK} docker compose plugin version ${compose_version:-unknown} is below minimum $DOCKER_COMPOSE_V2_MIN_VERSION${NC}"
+            failed_checks+=("docker compose plugin too old: ${compose_version:-unknown}")
+            ((failed_count++)) || true
+        fi
+    elif command -v docker-compose &>/dev/null; then
         compose_version=$(docker-compose --version 2>/dev/null | grep -oP '\d+\.\d+\.\d+' | head -n1)
 
-        if [[ -z "$compose_version" ]]; then
-            echo -e "${RED}  ${CROSS_MARK} Cannot determine docker-compose version${NC}"
-            failed_checks+=("docker-compose version unknown")
-            ((failed_count++)) || true
-        elif ! version_compare "$compose_version" "$DOCKER_COMPOSE_MIN_VERSION"; then
-            echo -e "${RED}  ${CROSS_MARK} docker-compose version $compose_version is below minimum $DOCKER_COMPOSE_MIN_VERSION${NC}"
-            echo -e "${YELLOW}  Suggestion: Upgrade docker-compose with 'sudo apt-get install --only-upgrade docker-compose'${NC}"
-            failed_checks+=("docker-compose version too old: $compose_version")
-            ((failed_count++)) || true
+        if [[ -n "$compose_version" ]] && version_compare "$compose_version" "$DOCKER_COMPOSE_MIN_VERSION"; then
+            echo -e "${GREEN}  ${CHECK_MARK} docker-compose (v1 standalone) version: $compose_version${NC}"
+            echo -e "${YELLOW}  ${WARNING_MARK} v1 is end-of-life; install docker-compose-plugin when convenient${NC}"
         else
-            echo -e "${GREEN}  ${CHECK_MARK} docker-compose version: $compose_version (meets minimum $DOCKER_COMPOSE_MIN_VERSION)${NC}"
+            echo -e "${RED}  ${CROSS_MARK} docker-compose version ${compose_version:-unknown} is below minimum $DOCKER_COMPOSE_MIN_VERSION${NC}"
+            failed_checks+=("docker-compose too old: ${compose_version:-unknown}")
+            ((failed_count++)) || true
         fi
+    else
+        echo -e "${RED}  ${CROSS_MARK} Neither 'docker compose' nor 'docker-compose' is available${NC}"
+        echo -e "${YELLOW}  Suggestion: sudo apt-get install docker-compose-plugin${NC}"
+        failed_checks+=("Docker Compose not installed")
+        ((failed_count++)) || true
     fi
     ((check_count++)) || true
     echo ""

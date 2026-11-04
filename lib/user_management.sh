@@ -44,10 +44,19 @@
 
 set -euo pipefail
 
+USER_MANAGEMENT_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Shared helpers. This module re-exports write_preserving_inode, which is defined
+# in common.sh, so it must load it rather than assume a caller did: sourcing this
+# file on its own otherwise aborts under `set -e` with
+# "export: write_preserving_inode: not a function".
+# shellcheck source=lib/common.sh
+source "${USER_MANAGEMENT_LIB_DIR}/common.sh"
+source "${USER_MANAGEMENT_LIB_DIR}/proxy_security.sh"
+
 # Source QR generator module for client configuration export
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-if [[ -f "${SCRIPT_DIR}/qr_generator.sh" ]]; then
-    source "${SCRIPT_DIR}/qr_generator.sh"
+if [[ -f "${USER_MANAGEMENT_LIB_DIR}/qr_generator.sh" ]]; then
+    source "${USER_MANAGEMENT_LIB_DIR}/qr_generator.sh"
 fi
 
 # ============================================================================
@@ -78,21 +87,10 @@ fi
 # Logging Functions
 # ============================================================================
 
-log_info() {
-    echo -e "${BLUE}[INFO]${NC} $*"
-}
-
-log_success() {
-    echo -e "${GREEN}[✓]${NC} $*"
-}
-
-log_warning() {
-    echo -e "${YELLOW}[⚠]${NC} $*"
-}
-
-log_error() {
-    echo -e "${RED}[✗]${NC} $*" >&2
-}
+# Logging comes from lib/logger.sh — see the note there on why the output shape
+# differs between a terminal and a captured stream.
+# shellcheck source=lib/logger.sh
+source "$(dirname "${BASH_SOURCE[0]}")/logger.sh"
 
 # ============================================================================
 # TASK-6.2: UUID Generation
@@ -880,6 +878,10 @@ apply_per_user_routing() {
 }
 
 reload_xray() {
+    validate_proxy_auth_config "$XRAY_CONFIG" || {
+        log_error 'Proxy authentication preflight failed; Xray activation refused'
+        return 1
+    }
     log_info "Reloading Xray configuration..."
 
     if ! docker ps --format '{{.Names}}' | grep -q "^${XRAY_CONTAINER}$"; then
@@ -1130,11 +1132,6 @@ update_proxy_accounts() {
 # Returns: 0 on success, 1 on failure
 # =============================================================================
 rebuild_proxy_accounts_from_users_json() {
-    if [[ ! -f "${USERS_JSON}" ]]; then
-        log_info "users.json not found, skipping proxy accounts rebuild"
-        return 0
-    fi
-
     if ! jq -e '.inbounds[] | select(.tag == "socks5-proxy")' "${XRAY_CONFIG}" >/dev/null 2>&1; then
         log_info "Proxy inbounds not in config, skipping accounts rebuild"
         return 0
@@ -1144,7 +1141,10 @@ rebuild_proxy_accounts_from_users_json() {
     proxy_accounts=$(jq '[.users[]
         | select(.proxy_password != null and .proxy_password != "")
         | {user: .username, pass: .proxy_password}
-    ]' "${USERS_JSON}" 2>/dev/null || echo "[]")
+    ]' "${USERS_JSON}" 2>/dev/null) || {
+        log_error "Cannot read users for proxy account synchronization"
+        return 1
+    }
 
     local tmp
     tmp=$(mktemp)
@@ -1156,7 +1156,11 @@ rebuild_proxy_accounts_from_users_json() {
         log_error "Failed to rebuild proxy accounts from users.json"
         return 1
     fi
-    write_preserving_inode "$tmp" "${XRAY_CONFIG}"
+    if ! validate_proxy_auth_config "$tmp"; then
+        rm -f "$tmp"
+        return 1
+    fi
+    write_preserving_inode "$tmp" "${XRAY_CONFIG}" || return 1
 
     local count
     count=$(echo "$proxy_accounts" | jq 'length')
@@ -1881,6 +1885,10 @@ export_all_proxy_configs() {
     local username="$1"
     local proxy_password="${2:-}"
 
+    source "${USER_MANAGEMENT_LIB_DIR}/proxy_security.sh"
+    PROXY_NOTLS_ENABLED=$(resolve_proxy_notls "${PROXY_NOTLS_ENABLED-}" "$ENV_FILE") || return 1
+    export PROXY_NOTLS_ENABLED
+
     # Load environment variables from .env file (v3.4 TLS support)
     # Required for export functions to determine protocol (socks5/socks5s, http/https)
     if [[ -f "$ENV_FILE" ]]; then
@@ -1888,19 +1896,16 @@ export_all_proxy_configs() {
         export ENABLE_PUBLIC_PROXY=$(grep -E "^ENABLE_PUBLIC_PROXY=" "$ENV_FILE" 2>/dev/null | cut -d'=' -f2)
         export ENABLE_PROXY_TLS=$(grep -E "^ENABLE_PROXY_TLS=" "$ENV_FILE" 2>/dev/null | cut -d'=' -f2)
         export DOMAIN=$(grep -E "^DOMAIN=" "$ENV_FILE" 2>/dev/null | cut -d'=' -f2)
-        export PROXY_NOTLS_ENABLED=$(grep -E "^PROXY_NOTLS_ENABLED=" "$ENV_FILE" 2>/dev/null | cut -d'=' -f2)
 
         # Set defaults if not found in .env
         [[ -z "$ENABLE_PUBLIC_PROXY" ]] && export ENABLE_PUBLIC_PROXY="false"
         [[ -z "$ENABLE_PROXY_TLS" ]] && export ENABLE_PROXY_TLS="false"
         [[ -z "$DOMAIN" ]] && export DOMAIN=""
-        [[ -z "$PROXY_NOTLS_ENABLED" ]] && export PROXY_NOTLS_ENABLED="false"
     else
         # .env file not found, use defaults (no TLS)
         export ENABLE_PUBLIC_PROXY="false"
         export ENABLE_PROXY_TLS="false"
         export DOMAIN=""
-        export PROXY_NOTLS_ENABLED="false"
     fi
 
     # If password not provided, read from users.json
@@ -2552,10 +2557,10 @@ create_user() {
                 done
 
                 # Source mtproxy_secret_manager.sh
-                if [[ -f "${SCRIPT_DIR}/mtproxy_secret_manager.sh" ]]; then
-                    source "${SCRIPT_DIR}/mtproxy_secret_manager.sh"
+                if [[ -f "${USER_MANAGEMENT_LIB_DIR}/mtproxy_secret_manager.sh" ]]; then
+                    source "${USER_MANAGEMENT_LIB_DIR}/mtproxy_secret_manager.sh"
                 else
-                    log_error "MTProxy secret manager not found: ${SCRIPT_DIR}/mtproxy_secret_manager.sh"
+                    log_error "MTProxy secret manager not found: ${USER_MANAGEMENT_LIB_DIR}/mtproxy_secret_manager.sh"
                     log_warning "Skipping MTProxy configuration"
                     mtproxy_secret=""
                     mtproxy_secret_type=""
@@ -2637,8 +2642,8 @@ create_user() {
         log_info "Regenerating MTProxy secret file..."
 
         # Source mtproxy_manager.sh
-        if [[ -f "${SCRIPT_DIR}/mtproxy_manager.sh" ]]; then
-            source "${SCRIPT_DIR}/mtproxy_manager.sh"
+        if [[ -f "${USER_MANAGEMENT_LIB_DIR}/mtproxy_manager.sh" ]]; then
+            source "${USER_MANAGEMENT_LIB_DIR}/mtproxy_manager.sh"
 
             if ! regenerate_mtproxy_secret_file_from_users; then
                 log_warning "Failed to regenerate MTProxy secret file (continuing anyway)"

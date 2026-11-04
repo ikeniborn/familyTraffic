@@ -167,6 +167,26 @@ print_verbose() {
     fi
 }
 
+# Run one test function and keep the suite going.
+#
+# Each test reports its own outcome through print_success/print_failure/print_skip,
+# so a `return 1` needs no accounting here — it only must not abort the run under
+# `set -e`, which is what the previous `test_xx || true` calls achieved.
+#
+# What this adds is the missing-function case. A name that does not resolve is
+# reported as a suite error instead of writing "command not found" to stderr and
+# leaving the totals one test short with nothing to explain the gap.
+run_test() {
+    local test_fn="$1"
+
+    if ! declare -f "$test_fn" >/dev/null 2>&1; then
+        print_failure "${test_fn}: test function is not defined (suite error)"
+        return 0
+    fi
+
+    "$test_fn" || true
+}
+
 check_root() {
     if [[ $EUID -ne 0 ]]; then
         echo -e "${RED}ERROR: This script must be run as root${NC}" >&2
@@ -651,8 +671,8 @@ test_03_traffic_encryption() {
 
     # Wait for capture to finish
     sleep 5
-    kill $tcpdump_pid 2>/dev/null || true
-    wait $tcpdump_pid 2>/dev/null || true
+    kill "$tcpdump_pid" 2>/dev/null || true
+    wait "$tcpdump_pid" 2>/dev/null || true
 
     print_info "Analyzing captured traffic..."
 
@@ -1253,7 +1273,7 @@ parse_arguments() {
 #              Required for XTLS Vision DPI bypass (Tier 1 obfuscation)
 # ==============================================================================
 test_xtls_vision_enabled() {
-    print_test_header "XTLS Vision — flow field verification (TC-01)"
+    print_header "XTLS Vision — flow field verification (TC-01)"
 
     local xray_config="${XRAY_CONFIG:-/opt/familytraffic/config/xray_config.json}"
 
@@ -1362,22 +1382,21 @@ main() {
     check_prerequisites
 
     # Run test suite
-    test_01_reality_tls_config || true
-    test_02_haproxy_tls || true  # v4.3: HAProxy TLS termination
+    run_test test_01_reality_tls_config
+    run_test test_02_haproxy_tls  # v4.3: HAProxy TLS termination
 
     if [[ "$QUICK_MODE" != "true" ]]; then
-        test_03_traffic_encryption || true
+        run_test test_03_traffic_encryption
     else
         print_skip "Traffic encryption test skipped (--quick mode)"
-        ((TESTS_SKIPPED++)) || true
     fi
 
-    test_04_certificate_security || true
-    test_05_dpi_resistance || true
-    test_06_tls_vulnerabilities || true
-    test_07_proxy_protocol_security || true
-    test_08_data_leak_detection || true
-    test_xtls_vision_enabled || true  # TC-01 (v5.25): XTLS Vision flow field verification
+    run_test test_04_certificate_security
+    run_test test_05_dpi_resistance
+    run_test test_06_tls_vulnerabilities
+    run_test test_07_proxy_protocol_security
+    run_test test_08_data_leak_detection
+    run_test test_xtls_vision_enabled  # TC-01 (v5.25): XTLS Vision flow field verification
 
     # Print summary and exit
     print_summary

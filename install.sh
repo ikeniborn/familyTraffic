@@ -172,6 +172,7 @@ check_root() {
 source_libraries() {
     local lib_dir="${SCRIPT_DIR}/lib"
     local required_modules=(
+        "common.sh"
         "os_detection.sh"
         "dependencies.sh"
         "old_install_detect.sh"
@@ -179,7 +180,6 @@ source_libraries() {
         "sudoers_info.sh"
         "orchestrator.sh"
         "verification.sh"
-        "security_hardening.sh"
         "certbot_setup.sh"
     )
 
@@ -242,6 +242,10 @@ main() {
     print_step 1 "Checking root privileges"
     check_root
     print_success "Running with root privileges"
+    if [[ -e /opt/familytraffic/data/users.json ]]; then
+        print_error 'Existing deployment detected. Use familytraffic-security reconcile with a prebuilt image instead of the fresh installer.'
+        exit 1
+    fi
 
     # Run migration (upgrade path: /opt/familytraffic → /opt/familytraffic)
     if [[ -d /opt/familytraffic ]] && [[ ! -L /opt/familytraffic ]]; then
@@ -348,6 +352,12 @@ main() {
     collect_parameters
     print_success "Parameters collected"
 
+    # Public proxy reconciliation requires active host firewall protection.
+    if [[ "$ENABLE_PUBLIC_PROXY" == "true" ]] && ! LC_ALL=C ufw status | grep -q '^Status: active$'; then
+        print_error 'UFW must be active before installing public proxies. Allow SSH access and enable UFW, then retry.'
+        exit 1
+    fi
+
     # Step 7.5: Acquire TLS certificate (v3.4) - only if public proxy + TLS enabled
     if [[ "$ENABLE_PUBLIC_PROXY" == "true" ]] && [[ "$ENABLE_PROXY_TLS" == "true" ]]; then
         print_message "${COLOR_BLUE}" "\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -360,7 +370,7 @@ main() {
         server_ip=$(get_server_public_ip)
 
         # 1. Validate DNS
-        print_message "${COLOR_CYAN}" "[1/6] Validating DNS configuration..."
+        print_message "${COLOR_CYAN}" "[1/4] Validating DNS configuration..."
         if ! validate_domain_dns "$DOMAIN" "$server_ip"; then
             print_error "DNS validation failed. Certificate acquisition aborted."
             print_message "${COLOR_YELLOW}" "Fix DNS configuration and retry installation."
@@ -368,38 +378,22 @@ main() {
         fi
 
         # 2. Install certbot
-        print_message "${COLOR_CYAN}" "[2/6] Installing certbot..."
+        print_message "${COLOR_CYAN}" "[2/4] Installing certbot..."
         if ! install_certbot; then
             print_error "Certbot installation failed"
             exit 1
         fi
 
-        # 3. Open port 80 for ACME challenge
-        print_message "${COLOR_CYAN}" "[3/6] Opening port 80 for ACME HTTP-01 challenge..."
-        if ! open_port_80_for_acme; then
-            print_error "Failed to open port 80"
-            exit 1
-        fi
-
-        # 4. Obtain certificate
-        print_message "${COLOR_CYAN}" "[4/6] Obtaining Let's Encrypt certificate..."
+        # 3. Obtain certificate; the unified ACME workflow manages port 80
+        print_message "${COLOR_CYAN}" "[3/4] Obtaining Let's Encrypt certificate..."
         print_message "${COLOR_YELLOW}" "  This may take 30-60 seconds..."
         if ! obtain_certificate "$DOMAIN" "$EMAIL"; then
             print_error "Certificate acquisition failed"
-            # Attempt to close port 80 even on failure
-            close_port_80_after_acme || true
             exit 1
         fi
 
-        # 5. Close port 80
-        print_message "${COLOR_CYAN}" "[5/6] Closing port 80..."
-        if ! close_port_80_after_acme; then
-            print_warning "Failed to close port 80 automatically"
-            print_message "${COLOR_YELLOW}" "  You may need to manually close it: sudo ufw delete allow 80/tcp"
-        fi
-
-        # 6. Setup auto-renewal cron job
-        print_message "${COLOR_CYAN}" "[6/6] Setting up certificate auto-renewal..."
+        # 4. Setup auto-renewal cron job
+        print_message "${COLOR_CYAN}" "[4/4] Setting up certificate auto-renewal..."
         if ! setup_renewal_cron; then
             print_warning "Failed to setup auto-renewal cron"
             print_message "${COLOR_YELLOW}" "  You may need to configure it manually"
@@ -532,7 +526,12 @@ LOGROTATE_EOF
     echo ""
     print_message "${COLOR_CYAN}" "Next Steps:"
     print_message "${COLOR_YELLOW}" "  1. Configure sudoers (see instructions above)"
-    print_message "${COLOR_YELLOW}" "  2. Add your first user: familytraffic add-user <username>"
+    if [[ "${ENABLE_PUBLIC_PROXY:-false}" == true ]]; then
+        print_message "${COLOR_YELLOW}" "  2. Initial proxy user is provisioned. Retrieve its settings: familytraffic show-user <username>"
+        print_message "${COLOR_YELLOW}" "     Verify active protection: familytraffic-security check"
+    else
+        print_message "${COLOR_YELLOW}" "  2. Add your first user: familytraffic add-user <username>"
+    fi
     print_message "${COLOR_YELLOW}" "  3. Check service status: familytraffic status"
     print_message "${COLOR_YELLOW}" "  4. View logs: familytraffic logs"
     echo ""

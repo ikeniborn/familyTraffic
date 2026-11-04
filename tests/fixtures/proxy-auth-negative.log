@@ -1,0 +1,12 @@
+2026-10-31T12:00:00Z HTTP 407 authentication challenge
+2026-10-31T12:00:00Z FT_AUTH_SUCCESS protocol=http src=192.0.2.10
+2026-10-31T12:00:00Z general-log FT_AUTH_FAILURE protocol=http src=192.0.2.10
+X-Forwarded-For: 192.0.2.10
+2026-10-31T12:00:00Z FT_AUTH_FAILURE protocol=http src=attacker.example.com
+2026-10-31T12:00:00Z FT_AUTH_FAILURE protocol=http src=127.0.0.1
+2026-10-31T12:00:00Z FT_AUTH_FAILURE protocol=socks src=::1
+2026-10-31T12:00:00Z FT_AUTH_FAILURE protocol=http src=192.0.2.10\nforged
+2026-99-99T99:99:99Z FT_AUTH_FAILURE protocol=http src=192.0.2.10
+2026-10-31T12:00:00Z FT_AUTH_FAILURE protocol=evil src=192.0.2.10
+2026-10-31T12:00:00Z FT_AUTH_FAILURE protocol=http src=192.0.2.10:1234
+2026-10-31T12:00:00Z FT_AUTH_FAILURE protocol=http src=999.999.999.999

@@ -1,0 +1,126 @@
+# .github/workflows/lint-and-test.yml
+# familyTraffic VPN — Lint and unit tests
+#
+# Separate from build-and-push.yml, which only reacts to a VERSION bump and
+# builds the image. This workflow guards the shell sources on every change,
+# with no VERSION bump required.
+#
+# Jobs:
+#   shellcheck — hard gate on error-severity findings, plus a baseline that
+#                may not grow (see tests/lint.sh and .shellcheckrc)
+#   bats       — unit suite; integration and performance suites are excluded
+#                because they need a deployed container
+
+name: Lint and Test
+
+on:
+  push:
+    branches: [master, test]
+    paths:
+      - 'lib/**'
+      - 'scripts/**'
+      - 'install.sh'
+      - 'docker/familytraffic/*.sh'
+      - 'docker/familytraffic/Dockerfile'
+      - 'docker/familytraffic/xray/**'
+      - 'tests/**'
+      - '.shellcheckrc'
+      - '.github/workflows/lint-and-test.yml'
+  pull_request:
+    branches: [master, test]
+    paths:
+      - 'lib/**'
+      - 'scripts/**'
+      - 'install.sh'
+      - 'docker/familytraffic/*.sh'
+      - 'docker/familytraffic/Dockerfile'
+      - 'docker/familytraffic/xray/**'
+      - 'tests/**'
+      - '.shellcheckrc'
+      - '.github/workflows/lint-and-test.yml'
+  workflow_dispatch:
+
+jobs:
+  shellcheck:
+    name: ShellCheck
+    runs-on: ubuntu-latest
+    env:
+      SHELLCHECK_VERSION: v0.9.0
+    steps:
+      - uses: actions/checkout@v4
+
+      # Pinned deliberately. The gate compares a total finding count against a
+      # recorded baseline, and that number is only meaningful for one
+      # shellcheck release — a newer version adds or retires checks and shifts
+      # the count, turning the gate red for a reason unrelated to the change
+      # under review. Bumping this is a deliberate step: change the version,
+      # run `tests/lint.sh --update-baseline`, and commit both together.
+      - name: Install shellcheck ${{ env.SHELLCHECK_VERSION }}
+        run: |
+          curl -fsSL "https://github.com/koalaman/shellcheck/releases/download/${SHELLCHECK_VERSION}/shellcheck-${SHELLCHECK_VERSION}.linux.x86_64.tar.xz" \
+            | tar -xJf - --strip-components=1 -C /tmp "shellcheck-${SHELLCHECK_VERSION}/shellcheck"
+          sudo install -m 0755 /tmp/shellcheck /usr/local/bin/shellcheck
+
+      - name: Report version
+        run: shellcheck --version
+
+      - name: Run gate
+        run: ./tests/lint.sh
+
+  bats:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install bats
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y bats jq fail2ban
+
+      - name: Report version
+        run: bats --version
+
+      # Two tests in test_os_detection.bats call skip_if_not_root and are
+      # skipped here; the runner is a non-root user by design.
+      - name: Run unit suite
+        run: bats --print-output-on-failure tests/unit/
+
+      # Parse-only. These suites need a deployed familytraffic container, so
+      # they cannot execute in CI — but a syntax error in them should still
+      # break the build rather than surface months later.
+      - name: Parse integration and performance suites
+        run: |
+          bats --count tests/integration/
+          bats --count tests/performance/
+
+  xray:
+    name: Patched Xray upstream tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Focused journal and authentication tests
+        run: bash docker/familytraffic/xray/test.sh focused
+      - name: Complete upstream suite
+        run: bash docker/familytraffic/xray/test.sh all
+
+  security-lab:
+    name: Isolated proxy security acceptance
+    needs: xray
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install migration test dependency
+        run: sudo apt-get update && sudo apt-get install -y bats jq fail2ban
+      - name: Build reviewed application image
+        run: docker build -f docker/familytraffic/Dockerfile -t familytraffic:proxy-security .
+      - name: Run real proxy firewall and authentication scenarios
+        run: bash tests/security_lab/run.sh --image familytraffic:proxy-security
+      - name: Preserve redacted acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: proxy-security-evidence
+          path: tests/security_lab/artifacts/
+          if-no-files-found: error

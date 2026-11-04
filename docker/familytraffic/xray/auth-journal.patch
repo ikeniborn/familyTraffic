@@ -1,0 +1,333 @@
+diff --git a/common/ftauth/journal.go b/common/ftauth/journal.go
+new file mode 100644
+index 0000000..6a9c26b
+--- /dev/null
++++ b/common/ftauth/journal.go
+@@ -0,0 +1,45 @@
++// Package ftauth writes credential-free authentication failure events.
++package ftauth
++
++import (
++	"errors"
++	"fmt"
++	"io"
++	"net"
++	"os"
++	"time"
++)
++
++// Record appends one event using a validated protocol and connection address.
++func Record(protocol string, source net.Addr) error {
++	return record("/var/log/xray/auth.log", time.Now(), protocol, source)
++}
++
++func record(path string, now time.Time, protocol string, source net.Addr) error {
++	if protocol != "http" && protocol != "socks" {
++		return errors.New("invalid authentication event protocol")
++	}
++	addr, ok := source.(*net.TCPAddr)
++	if !ok || addr == nil || addr.Zone != "" || addr.IP.To16() == nil {
++		return errors.New("invalid authentication event address")
++	}
++	line := fmt.Sprintf("%s FT_AUTH_FAILURE protocol=%s src=%s\n", now.UTC().Format("2006-01-02T15:04:05Z"), protocol, addr.IP.String())
++	file, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0600)
++	if err != nil {
++		return errors.New("authentication journal open failed")
++	}
++	info, err := file.Stat()
++	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm() != 0600 {
++		file.Close()
++		return errors.New("authentication journal requires regular file mode 0600")
++	}
++	n, err := file.Write([]byte(line))
++	closeErr := file.Close()
++	if err != nil || n != len(line) {
++		return io.ErrShortWrite
++	}
++	if closeErr != nil {
++		return errors.New("authentication journal close failed")
++	}
++	return nil
++}
+diff --git a/common/ftauth/journal_test.go b/common/ftauth/journal_test.go
+new file mode 100644
+index 0000000..c1c8cb8
+--- /dev/null
++++ b/common/ftauth/journal_test.go
+@@ -0,0 +1,91 @@
++package ftauth
++
++import (
++	"net"
++	"os"
++	"path/filepath"
++	"strings"
++	"sync"
++	"testing"
++	"time"
++)
++
++func TestJournal(t *testing.T) {
++	now := time.Date(2026, 10, 31, 12, 0, 0, 0, time.FixedZone("offset", 3600))
++	for _, ip := range []string{"192.0.2.10", "2001:0db8:0:0::1", "::ffff:192.0.2.10"} {
++		path := filepath.Join(t.TempDir(), "auth.log")
++		addr := &net.TCPAddr{IP: net.ParseIP(ip), Port: 1234}
++		if err := record(path, now, "http", addr); err != nil {
++			t.Fatal(err)
++		}
++		data, _ := os.ReadFile(path)
++		want := "2026-10-31T11:00:00Z FT_AUTH_FAILURE protocol=http src=" + addr.IP.String() + "\n"
++		if string(data) != want {
++			t.Fatalf("got %q want %q", data, want)
++		}
++		st, _ := os.Stat(path)
++		if st.Mode().Perm() != 0600 {
++			t.Fatal(st.Mode())
++		}
++		if err := os.Rename(path, path+".1"); err != nil {
++			t.Fatal(err)
++		}
++		if err := record(path, now, "socks", addr); err != nil {
++			t.Fatal(err)
++		}
++		old, _ := os.ReadFile(path + ".1")
++		if string(old) != want {
++			t.Fatal("rotated file changed")
++		}
++	}
++}
++func TestRejectUntrustedInput(t *testing.T) {
++	path := filepath.Join(t.TempDir(), "auth.log")
++	for _, protocol := range []string{"http\nforged", "HTTP", ""} {
++		if record(path, time.Now(), protocol, &net.TCPAddr{IP: net.ParseIP("192.0.2.10")}) == nil {
++			t.Fatal("accepted protocol")
++		}
++	}
++	for _, addr := range []net.Addr{nil, &net.TCPAddr{}, &net.UnixAddr{Name: "victim\n", Net: "unix"}} {
++		if record(path, time.Now(), "http", addr) == nil {
++			t.Fatal("accepted address")
++		}
++	}
++	if _, err := os.Stat(path); !os.IsNotExist(err) {
++		t.Fatal("invalid input created file")
++	}
++}
++func TestWriteFailures(t *testing.T) {
++	addr := &net.TCPAddr{IP: net.ParseIP("192.0.2.10")}
++	dir := t.TempDir()
++	if record(dir, time.Now(), "http", addr) == nil {
++		t.Fatal("accepted directory")
++	}
++	path := filepath.Join(dir, "auth.log")
++	os.WriteFile(path, nil, 0644)
++	if record(path, time.Now(), "http", addr) == nil {
++		t.Fatal("accepted unsafe permissions")
++	}
++	if record(filepath.Join(dir, "absent", "auth.log"), time.Now(), "http", addr) == nil {
++		t.Fatal("ignored open error")
++	}
++}
++func TestConcurrentLines(t *testing.T) {
++	path := filepath.Join(t.TempDir(), "auth.log")
++	var wg sync.WaitGroup
++	for i := 0; i < 100; i++ {
++		wg.Add(1)
++		go func() {
++			defer wg.Done()
++			if err := record(path, time.Unix(0, 0), "socks", &net.TCPAddr{IP: net.ParseIP("192.0.2.10")}); err != nil {
++				t.Error(err)
++			}
++		}()
++	}
++	wg.Wait()
++	data, _ := os.ReadFile(path)
++	line := "1970-01-01T00:00:00Z FT_AUTH_FAILURE protocol=socks src=192.0.2.10\n"
++	if string(data) != strings.Repeat(line, 100) {
++		t.Fatal("incomplete or extra lines")
++	}
++}
+diff --git a/proxy/http/auth_journal_test.go b/proxy/http/auth_journal_test.go
+new file mode 100644
+index 0000000..5f81fc3
+--- /dev/null
++++ b/proxy/http/auth_journal_test.go
+@@ -0,0 +1,24 @@
++package http
++
++import (
++	"encoding/base64"
++	"testing"
++)
++
++func TestChallengeVersusMismatch(t *testing.T) {
++	s := Server{config: &ServerConfig{Accounts: map[string]string{"u": "p"}}}
++	for _, tc := range []struct {
++		auth string
++		want bool
++	}{
++		{"", false}, {"Bearer forged", false}, {"Basic !!!", false},
++		{"Basic " + base64.StdEncoding.EncodeToString([]byte("no-colon")), false},
++		{"Basic " + base64.StdEncoding.EncodeToString([]byte("u:p")), false},
++		{"Basic " + base64.StdEncoding.EncodeToString([]byte("u:wrong")), true},
++		{"Basic " + base64.StdEncoding.EncodeToString([]byte("victim\nforged:wrong")), true},
++	} {
++		if got := s.credentialMismatch(tc.auth); got != tc.want {
++			t.Fatalf("mismatch=%v want %v", got, tc.want)
++		}
++	}
++}
+diff --git a/proxy/http/server.go b/proxy/http/server.go
+index 0121651..b64cb86 100644
+--- a/proxy/http/server.go
++++ b/proxy/http/server.go
+@@ -13,6 +13,7 @@ import (
+ 	"github.com/xtls/xray-core/common"
+ 	"github.com/xtls/xray-core/common/buf"
+ 	"github.com/xtls/xray-core/common/errors"
++	"github.com/xtls/xray-core/common/ftauth"
+ 	"github.com/xtls/xray-core/common/log"
+ 	"github.com/xtls/xray-core/common/net"
+ 	"github.com/xtls/xray-core/common/protocol"
+@@ -80,6 +81,11 @@ type readerOnly struct {
+ 	io.Reader
+ }
+ 
++func (s *Server) credentialMismatch(auth string) bool {
++	user, pass, ok := parseBasicAuth(auth)
++	return ok && !s.config.HasAccount(user, pass)
++}
++
+ func (s *Server) Process(ctx context.Context, network net.Network, conn stat.Connection, dispatcher routing.Dispatcher) error {
+ 	return s.ProcessWithFirstbyte(ctx, network, conn, dispatcher)
+ }
+@@ -121,6 +127,11 @@ Start:
+ 	if len(s.config.Accounts) > 0 {
+ 		user, pass, ok := parseBasicAuth(request.Header.Get("Proxy-Authorization"))
+ 		if !ok || !s.config.HasAccount(user, pass) {
++			if s.credentialMismatch(request.Header.Get("Proxy-Authorization")) {
++				if err := ftauth.Record("http", conn.RemoteAddr()); err != nil {
++					errors.LogWarning(ctx, "authentication protection error: journal write failed")
++				}
++			}
+ 			return common.Error2(conn.Write([]byte("HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic realm=\"proxy\"\r\n\r\n")))
+ 		}
+ 		if inbound != nil {
+diff --git a/proxy/socks/auth_journal_test.go b/proxy/socks/auth_journal_test.go
+new file mode 100644
+index 0000000..b3d9bcc
+--- /dev/null
++++ b/proxy/socks/auth_journal_test.go
+@@ -0,0 +1,33 @@
++package socks
++
++import (
++	"bytes"
++	stderrors "errors"
++	"github.com/xtls/xray-core/common/errors"
++	"testing"
++)
++
++func TestCredentialMismatchIdentity(t *testing.T) {
++	for _, tc := range []struct {
++		name     string
++		data     []byte
++		mismatch bool
++	}{
++		{"wrong", []byte{2, 1, 1, 'u', 1, 'x'}, true},
++		{"valid", []byte{2, 1, 1, 'u', 1, 'p'}, false},
++		{"truncated", []byte{2, 1, 1, 'u'}, false},
++		{"version", []byte{2, 5, 1, 'u', 1, 'x'}, false},
++		{"empty", []byte{2, 1, 0, 1, 'x'}, false},
++		{"method", []byte{0}, false},
++	} {
++		t.Run(tc.name, func(t *testing.T) {
++			s := ServerSession{config: &ServerConfig{AuthType: AuthType_PASSWORD, Accounts: map[string]string{"u": "p"}}}
++			var out bytes.Buffer
++			_, err := s.auth5(1, bytes.NewReader(tc.data), &out)
++			wrapped := errors.New("failed to read request").Base(err)
++			if got := stderrors.Is(wrapped, ErrInvalidCredentials); got != tc.mismatch {
++				t.Fatalf("mismatch=%v err=%v", got, err)
++			}
++		})
++	}
++}
+diff --git a/proxy/socks/protocol.go b/proxy/socks/protocol.go
+index 9bccf60..85c0ec3 100644
+--- a/proxy/socks/protocol.go
++++ b/proxy/socks/protocol.go
+@@ -1,6 +1,7 @@
+ package socks
+ 
+ import (
++	"bytes"
+ 	"encoding/binary"
+ 	"io"
+ 
+@@ -33,6 +34,9 @@ const (
+ 	statusCmdNotSupport = 0x07
+ )
+ 
++// ErrInvalidCredentials identifies a parsed username/password mismatch.
++var ErrInvalidCredentials = errors.New("invalid username or password")
++
+ var addrParser = protocol.NewAddressParser(
+ 	protocol.AddressFamilyByte(0x01, net.AddressFamilyIPv4),
+ 	protocol.AddressFamilyByte(0x04, net.AddressFamilyIPv6),
+@@ -118,14 +122,24 @@ func (s *ServerSession) auth5(nMethod byte, reader io.Reader, writer io.Writer)
+ 	}
+ 
+ 	if expectedAuth == authPassword {
+-		username, password, err := ReadUsernamePassword(reader)
++		var version [1]byte
++		if _, err := io.ReadFull(reader, version[:]); err != nil {
++			return "", err
++		}
++		if version[0] != 1 {
++			return "", errors.New("invalid password authentication version")
++		}
++		username, password, err := ReadUsernamePassword(io.MultiReader(bytes.NewReader(version[:]), reader))
+ 		if err != nil {
+ 			return "", errors.New("failed to read username and password for authentication").Base(err)
+ 		}
++		if len(username) == 0 || len(password) == 0 {
++			return "", errors.New("empty password authentication field")
++		}
+ 
+ 		if !s.config.HasAccount(username, password) {
+ 			writeSocks5AuthenticationResponse(writer, 0x01, 0xFF)
+-			return "", errors.New("invalid username or password")
++			return "", ErrInvalidCredentials
+ 		}
+ 
+ 		if err := writeSocks5AuthenticationResponse(writer, 0x01, 0x00); err != nil {
+diff --git a/proxy/socks/server.go b/proxy/socks/server.go
+index 34c42ae..59ca56d 100644
+--- a/proxy/socks/server.go
++++ b/proxy/socks/server.go
+@@ -2,12 +2,14 @@ package socks
+ 
+ import (
+ 	"context"
++	stderrors "errors"
+ 	"io"
+ 	"time"
+ 
+ 	"github.com/xtls/xray-core/common"
+ 	"github.com/xtls/xray-core/common/buf"
+ 	"github.com/xtls/xray-core/common/errors"
++	"github.com/xtls/xray-core/common/ftauth"
+ 	"github.com/xtls/xray-core/common/log"
+ 	"github.com/xtls/xray-core/common/net"
+ 	"github.com/xtls/xray-core/common/protocol"
+@@ -118,6 +120,11 @@ func (s *Server) processTCP(ctx context.Context, conn stat.Connection, dispatche
+ 	}
+ 	request, err := svrSession.Handshake(reader, conn)
+ 	if err != nil {
++		if stderrors.Is(err, ErrInvalidCredentials) {
++			if err := ftauth.Record("socks", conn.RemoteAddr()); err != nil {
++				errors.LogWarning(ctx, "authentication protection error: journal write failed")
++			}
++		}
+ 		if inbound.Source.IsValid() {
+ 			log.Record(&log.AccessMessage{
+ 				From:   inbound.Source,

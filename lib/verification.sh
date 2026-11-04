@@ -41,6 +41,7 @@
 # ============================================================================
 
 set -euo pipefail
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/proxy_security.sh"
 
 # ============================================================================
 # Global Variables
@@ -70,23 +71,10 @@ VERIFICATION_ERRORS=()
 # Helper Functions
 # ============================================================================
 
-log_info() {
-    echo -e "${BLUE}[INFO]${NC} $*"
-}
-
-log_success() {
-    echo -e "${GREEN}[✓]${NC} $*"
-}
-
-log_warning() {
-    echo -e "${YELLOW}[⚠]${NC} $*"
-}
-
-log_error() {
-    echo -e "${RED}[✗]${NC} $*"
-    VERIFICATION_PASSED=false
-    VERIFICATION_ERRORS+=("$*")
-}
+# Logging comes from lib/logger.sh — see the note there on why the output shape
+# differs between a terminal and a captured stream.
+# shellcheck source=lib/logger.sh
+source "$(dirname "${BASH_SOURCE[0]}")/logger.sh"
 
 # ============================================================================
 # Main Verification Function
@@ -656,7 +644,7 @@ display_verification_summary() {
         echo "     docker ps | grep vless"
         echo ""
         echo "  3. Check logs:"
-        echo "     docker-compose -f /opt/familytraffic/docker-compose.yml logs"
+        echo "     docker compose -f /opt/familytraffic/docker-compose.yml logs"
         echo ""
     else
         log_error "VERIFICATION FAILED (${#VERIFICATION_ERRORS[@]} errors)"
@@ -669,7 +657,7 @@ display_verification_summary() {
         echo "Please review the errors above and fix them before proceeding."
         echo ""
         echo "Common fixes:"
-        echo "  1. Container issues: docker-compose -f /opt/familytraffic/docker-compose.yml up -d"
+        echo "  1. Container issues: docker compose -f /opt/familytraffic/docker-compose.yml up -d"
         echo "  2. Permission issues: Run the installation script again as root"
         echo "  3. Network issues: Check UFW Docker forwarding configuration"
         echo ""
@@ -741,6 +729,13 @@ validate_mandatory_tls() {
     # Check 4: Xray inbounds listen on 127.0.0.1 (v5.33 single-container: Nginx and Xray share localhost)
     log_info "  [4/5] Checking Xray proxy inbounds (should be 127.0.0.1)..."
     local config_file="${INSTALL_ROOT}/config/xray_config.json"
+    if ! validate_proxy_auth_config "$config_file" || ! jq -e '
+        [.inbounds[] | select(.tag == "socks5-proxy" or .tag == "http-proxy") |
+         .streamSettings.sockopt.acceptProxyProtocol == true] | length == 2 and all
+    ' "$config_file" >/dev/null 2>&1; then
+        log_error "    Proxy authentication or trusted source forwarding is not configured"
+        validation_failed=1
+    fi
     local socks5_listen
     local http_listen
     socks5_listen=$(jq -r '.inbounds[] | select(.tag=="socks5-proxy") | .listen' "$config_file" 2>/dev/null)

@@ -48,6 +48,7 @@
 #   $7 - enable_notls: "true"/"false" — include no-TLS proxy ports 1081/8119 (v5.35)
 # Returns: nginx.conf content on stdout; 0 on success, 1 on failure
 # ============================================================================
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/proxy_security.sh"
 NGINX_CONF="${NGINX_CONF:-/opt/familytraffic/config/nginx/nginx.conf}"
 
 
@@ -58,7 +59,8 @@ generate_nginx_config() {
     local xhttp_subdomain="${4:-}"
     local grpc_subdomain="${5:-}"
     local enable_mtproxy_cloak="${6:-false}"
-    local enable_notls="${7:-false}"
+    local enable_notls
+    enable_notls=$(resolve_proxy_notls "${7-}" "${VLESS_DIR:-/opt/familytraffic}/.env") || return 1
 
     if [[ -z "$cert_domain" ]]; then
         echo "ERROR: generate_nginx_config requires cert_domain as \$1" >&2
@@ -127,6 +129,7 @@ fi)
         ssl_certificate_key ${cert_path}/privkey.pem;
         ssl_protocols       TLSv1.3;
         proxy_pass          127.0.0.1:10800;
+        proxy_protocol on;
         proxy_connect_timeout 10s;
         proxy_timeout        300s;
     }
@@ -141,6 +144,7 @@ fi)
         ssl_certificate_key ${cert_path}/privkey.pem;
         ssl_protocols       TLSv1.3;
         proxy_pass          127.0.0.1:18118;
+        proxy_protocol on;
         proxy_connect_timeout 10s;
         proxy_timeout        300s;
     }
@@ -153,6 +157,7 @@ cat <<'NOTLS_BLOCK'
     server {
         listen 1081;
         proxy_pass 127.0.0.1:10800;
+        proxy_protocol on;
         proxy_connect_timeout 10s;
         proxy_timeout 300s;
     }
@@ -163,6 +168,7 @@ cat <<'NOTLS_BLOCK'
     server {
         listen 8119;
         proxy_pass 127.0.0.1:18118;
+        proxy_protocol on;
         proxy_connect_timeout 10s;
         proxy_timeout 300s;
     }

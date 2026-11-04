@@ -96,7 +96,7 @@ teardown() {
 }
 
 @test "validation functions are fast" {
-    source "${LIB_DIR}/validation.sh"
+    source "${LIB_DIR}/network_params.sh"
 
     local start_time=$(date +%s)
 
