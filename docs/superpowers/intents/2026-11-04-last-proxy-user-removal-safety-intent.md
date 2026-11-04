@@ -9,6 +9,13 @@ review:
     consistency: { status: passed }
     alignment: { status: passed }
   findings: []
+result_check:
+  verdict: OK
+  source: intent
+  intent_hash: fd48c9a3edee3ec5
+  last_run: 2026-11-04
+  reviewed: true
+  docs_checked: true
 workflow:
   route: chain
   continuation: execute
