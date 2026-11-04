@@ -172,3 +172,16 @@ Only a parsed wrong-credential attempt counts. HTTP authentication challenges, m
 The managed jail uses a file backend, numeric addresses, and a strict event grammar. Loopback is excluded. SSH and Reality remain outside this proxy jail. Validate source attribution, log-injection resistance, fifth-failure blocking, expiry, rotation, restart, firewall reload, and a second client's access in the isolated acceptance lab.
 
 IP-based protection cannot distinguish multiple users behind the same NAT. A changed public IP is handled as a new source, without a configuration change. This mechanism complements strong credentials; it does not replace authentication or provide account-level blocking.
+
+## Proxy ban allowlist
+
+Store operator-approved Fail2ban exceptions in
+`/etc/fail2ban/jail.d/familytraffic-proxy-auth.local`. Set `ignoreip` in the
+`[familytraffic-proxy-auth]` section. Preserve `127.0.0.0/8` and `::1` when adding
+explicit IP addresses. The generated `.conf` remains managed by the installer.
+
+Live verification compares the effective ignore list with the compiled Fail2ban
+configuration. Explicit configuration exceptions are accepted; unconfigured live
+exemptions and missing configured entries are rejected. The authentication password
+requirement and retry thresholds remain unchanged. After reloading the jail,
+remove an existing ban explicitly; the allowlist does not replace credentials.
