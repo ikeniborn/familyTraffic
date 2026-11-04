@@ -21,6 +21,7 @@ load '../test_helper'
             DOMAIN=ft.example.com
             EMAIL=ops@example.com
         }
+        ufw() { printf "Status: active\n"; }
         get_server_public_ip() { printf "%s\n" "203.0.113.10"; }
         validate_domain_dns() { return 0; }
         install_certbot() { return 0; }

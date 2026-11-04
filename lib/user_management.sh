@@ -44,19 +44,19 @@
 
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+USER_MANAGEMENT_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Shared helpers. This module re-exports write_preserving_inode, which is defined
 # in common.sh, so it must load it rather than assume a caller did: sourcing this
 # file on its own otherwise aborts under `set -e` with
 # "export: write_preserving_inode: not a function".
 # shellcheck source=lib/common.sh
-source "${SCRIPT_DIR}/common.sh"
-source "${SCRIPT_DIR}/proxy_security.sh"
+source "${USER_MANAGEMENT_LIB_DIR}/common.sh"
+source "${USER_MANAGEMENT_LIB_DIR}/proxy_security.sh"
 
 # Source QR generator module for client configuration export
-if [[ -f "${SCRIPT_DIR}/qr_generator.sh" ]]; then
-    source "${SCRIPT_DIR}/qr_generator.sh"
+if [[ -f "${USER_MANAGEMENT_LIB_DIR}/qr_generator.sh" ]]; then
+    source "${USER_MANAGEMENT_LIB_DIR}/qr_generator.sh"
 fi
 
 # ============================================================================
@@ -1885,7 +1885,7 @@ export_all_proxy_configs() {
     local username="$1"
     local proxy_password="${2:-}"
 
-    source "${SCRIPT_DIR}/proxy_security.sh"
+    source "${USER_MANAGEMENT_LIB_DIR}/proxy_security.sh"
     PROXY_NOTLS_ENABLED=$(resolve_proxy_notls "${PROXY_NOTLS_ENABLED-}" "$ENV_FILE") || return 1
     export PROXY_NOTLS_ENABLED
 
@@ -2557,10 +2557,10 @@ create_user() {
                 done
 
                 # Source mtproxy_secret_manager.sh
-                if [[ -f "${SCRIPT_DIR}/mtproxy_secret_manager.sh" ]]; then
-                    source "${SCRIPT_DIR}/mtproxy_secret_manager.sh"
+                if [[ -f "${USER_MANAGEMENT_LIB_DIR}/mtproxy_secret_manager.sh" ]]; then
+                    source "${USER_MANAGEMENT_LIB_DIR}/mtproxy_secret_manager.sh"
                 else
-                    log_error "MTProxy secret manager not found: ${SCRIPT_DIR}/mtproxy_secret_manager.sh"
+                    log_error "MTProxy secret manager not found: ${USER_MANAGEMENT_LIB_DIR}/mtproxy_secret_manager.sh"
                     log_warning "Skipping MTProxy configuration"
                     mtproxy_secret=""
                     mtproxy_secret_type=""
@@ -2642,8 +2642,8 @@ create_user() {
         log_info "Regenerating MTProxy secret file..."
 
         # Source mtproxy_manager.sh
-        if [[ -f "${SCRIPT_DIR}/mtproxy_manager.sh" ]]; then
-            source "${SCRIPT_DIR}/mtproxy_manager.sh"
+        if [[ -f "${USER_MANAGEMENT_LIB_DIR}/mtproxy_manager.sh" ]]; then
+            source "${USER_MANAGEMENT_LIB_DIR}/mtproxy_manager.sh"
 
             if ! regenerate_mtproxy_secret_file_from_users; then
                 log_warning "Failed to regenerate MTProxy secret file (continuing anyway)"
