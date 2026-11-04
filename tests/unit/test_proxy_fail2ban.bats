@@ -48,7 +48,7 @@ setup() {
     fail2ban-client() {
         case "$*" in
             '-t') return 0 ;;
-            '-d') printf '%s\n' "['add', 'familytraffic-proxy-auth', 'polling']" "['set', 'familytraffic-proxy-auth', 'addfailregex', '^ FT_AUTH_FAILURE protocol=(?:http|socks)']" ;;
+            '-d') printf '%s\n' "['add', 'familytraffic-proxy-auth', 'polling']" "['set', 'familytraffic-proxy-auth', 'addfailregex', '^ FT_AUTH_FAILURE protocol=(?:http|socks)']" "['set', 'familytraffic-proxy-auth', 'addignoreip', '127.0.0.0/8', '::1']" ;;
             'status familytraffic-proxy-auth') echo "File list: $FT_PROXY_AUTH_LOG" ;;
             'get familytraffic-proxy-auth maxretry') echo 5 ;;
             'get familytraffic-proxy-auth findtime') echo 600 ;;
@@ -106,4 +106,35 @@ PY
     dump="['set', 'familytraffic-proxy-auth', 'addfailregex', '$raw']"
     run _proxy_auth_live_regex_matches "$dump" "[0]: $expanded"
     [ "$status" -eq 0 ]
+}
+
+@test "live ignoreip permits explicit operator exceptions and rejects unconfigured exemptions" {
+    local defaults="['set', 'familytraffic-proxy-auth', 'addignoreip', '127.0.0.0/8', '::1']"
+    local configured="['set', 'familytraffic-proxy-auth', 'addignoreip', '127.0.0.0/8', '::1', '192.0.2.17']"
+    run _proxy_auth_ignoreip_matches "$configured" $'127.0.0.0/8\n::1\n192.0.2.17'
+    [ "$status" -eq 0 ]
+    run _proxy_auth_ignoreip_matches "$defaults" $'127.0.0.0/8\n::1\n192.0.2.17'
+    [ "$status" -ne 0 ]
+    run _proxy_auth_ignoreip_matches "$configured" $'127.0.0.0/8\n::1'
+    [ "$status" -ne 0 ]
+    run _proxy_auth_ignoreip_matches "$configured" $'127.0.0.0/8\n::1\n0.0.0.0/0'
+    [ "$status" -ne 0 ]
+}
+
+@test "configured ignoreip must preserve loopback exclusions" {
+    local missing="['set', 'familytraffic-proxy-auth', 'addignoreip', '192.0.2.17']"
+    run _proxy_auth_ignoreip_matches "$missing" '192.0.2.17'
+    [ "$status" -ne 0 ]
+}
+
+@test "reviewed legacy v3.2 jail is retired but customized variant is rejected" {
+    cp "$PROJECT_ROOT/tests/fixtures/legacy-vless-proxy.conf" "$FT_FAIL2BAN_DIR/jail.d/vless-proxy.conf"
+    run configure_proxy_auth_jail 1080,8118
+    [ "$status" -eq 0 ]
+    [ -f "$FT_FAIL2BAN_DIR/jail.d/vless-proxy.conf.disabled" ]
+    cp "$PROJECT_ROOT/tests/fixtures/legacy-vless-proxy.conf" "$FT_FAIL2BAN_DIR/jail.d/vless-proxy.conf"
+    printf '\n# operator customization\n' >> "$FT_FAIL2BAN_DIR/jail.d/vless-proxy.conf"
+    run configure_proxy_auth_jail 1080,8118
+    [ "$status" -eq 1 ]
+    [ -f "$FT_FAIL2BAN_DIR/jail.d/vless-proxy.conf" ]
 }

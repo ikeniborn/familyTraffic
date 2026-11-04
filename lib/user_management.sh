@@ -772,7 +772,11 @@ remove_client_from_xray() {
     fi
 
     # Apply configuration — write preserving inode (required for Docker bind mounts)
-    write_preserving_inode "$temp_file" "$XRAY_CONFIG"
+    if ! write_preserving_inode "$temp_file" "$XRAY_CONFIG"; then
+        log_error "Failed to save Xray client removal"
+        rm -f "$temp_file"
+        return 1
+    fi
     rm -f "${XRAY_CONFIG}.bak.$$"
 
     log_success "Client removed from Xray configuration"
@@ -2754,83 +2758,91 @@ create_user() {
 # TASK-6.5: User Removal
 # ============================================================================
 
-remove_user() {
+remove_user() (
     local username="$1"
+    local uuid connection_type work rollback=false database_changed=false restore_failed=false
 
-    # Run schema migration (v5.25)
-    migrate_users_schema_v525
+    validate_username "$username" || return 1
+    # Hold the existing database lock across validation, application, and commit.
+    exec 201>"$LOCK_FILE" || return 1
+    flock -x 201 || return 1
 
-    echo ""
     log_info "Removing VPN user: $username"
-    echo ""
-
-    # Step 1: Validate username
-    if ! validate_username "$username"; then
-        return 1
-    fi
-
-    # Step 2: Check if user exists
     if ! user_exists "$username"; then
         log_error "User '$username' does not exist"
         return 1
     fi
 
-    # Step 3: Get user info (UUID and connection_type)
-    local uuid
-    local connection_type
-
-    uuid=$(jq -r ".users[] | select(.username == \"$username\") | .uuid" "$USERS_JSON" 2>/dev/null)
-    connection_type=$(jq -r ".users[] | select(.username == \"$username\") | .connection_type // \"both\"" "$USERS_JSON" 2>/dev/null)
-
-    # UUID is only required for vpn/both users; proxy-only users have uuid=""
+    uuid=$(jq -er --arg user "$username" '.users[] | select(.username == $user) | .uuid // ""' "$USERS_JSON") || return 1
+    connection_type=$(jq -er --arg user "$username" '.users[] | select(.username == $user) | .connection_type // "both"' "$USERS_JSON") || return 1
     if [[ -z "$uuid" && "$connection_type" != "proxy" ]]; then
         log_error "Failed to retrieve UUID for user '$username'"
         return 1
     fi
 
-    log_info "User connection type: $connection_type"
-
-    # Step 4: Remove client from Xray configuration (only for vpn or both)
-    if [[ "$connection_type" == "vpn" || "$connection_type" == "both" ]]; then
-        if ! remove_client_from_xray "$uuid" "$username"; then
-            log_error "Failed to remove client from Xray configuration"
+    if [[ "$connection_type" == proxy || "$connection_type" == both ]]; then
+        # Managed proxy receivers must retain authenticated accounts, as on reload.
+        if ! jq -e --arg user "$username" '
+            all(.inbounds[] | select(.tag == "socks5-proxy" or .tag == "http-proxy");
+                (.settings.accounts | map(select(.user != $user)) | length) > 0)
+        ' "$XRAY_CONFIG" >/dev/null; then
+            log_error 'Cannot remove the last proxy account while public proxies are enabled'
             return 1
         fi
     fi
 
-    # Step 4.5: Remove SOCKS5/HTTP proxy accounts (only for proxy or both)
-    if [[ "$connection_type" == "proxy" || "$connection_type" == "both" ]]; then
-        if ! remove_proxy_accounts "$username"; then
-            log_error "Failed to remove proxy accounts"
-            return 1
+    work=$(mktemp -d) || return 1
+    chmod 700 "$work" || { rmdir "$work"; return 1; }
+    trap '
+        if [[ "$rollback" == true ]]; then
+            if [[ "$database_changed" == true ]]; then
+                write_preserving_inode "$work/users.before" "$USERS_JSON" || { restore_failed=true; log_error "Failed to restore user database"; }
+            fi
+            if write_preserving_inode "$work/xray.before" "$XRAY_CONFIG"; then
+                reload_xray || { restore_failed=true; log_error "Configuration restored, but Xray reload failed; operator action required"; }
+            else
+                restore_failed=true
+                log_error "Failed to restore Xray configuration; operator action required"
+            fi
         fi
-    fi
+        if [[ "$restore_failed" == true ]]; then
+            log_error "Recovery files retained in $work"
+        else
+            rm -rf "$work"
+        fi
+    ' EXIT
+    cp -p "$XRAY_CONFIG" "$work/xray.before" || return 1
+    cp -p "$USERS_JSON" "$work/users.before" || return 1
+    # Stage deletion and the existing legacy schema migration without changing users.json.
+    jq --arg user "$username" '
+        .users |= map(select(.username != $user) |
+            if .connection_type == null then . + {connection_type: "both"} else . end)
+    ' "$USERS_JSON" > "$work/users.next" || return 1
 
-    # Step 5: Reload Xray
+    rollback=true
+    if [[ "$connection_type" == vpn || "$connection_type" == both ]]; then
+        remove_client_from_xray "$uuid" "$username" || return 1
+    fi
+    if [[ "$connection_type" == proxy || "$connection_type" == both ]]; then
+        remove_proxy_accounts "$username" || return 1
+    fi
     if ! reload_xray; then
-        log_warning "Xray reload failed"
-    fi
-
-    # Step 6: Remove from users.json
-    if ! remove_user_from_json "$username"; then
-        log_error "Failed to remove user from database"
+        log_error 'User removal failed: Xray activation failed; preserving user database'
         return 1
     fi
 
-    # Step 7: Remove user directory
+    database_changed=true
+    write_preserving_inode "$work/users.next" "$USERS_JSON" || return 1
+    chmod 600 "$USERS_JSON" || return 1
+    rollback=false
+
     local user_dir="${CLIENTS_DIR}/${username}"
     if [[ -d "$user_dir" ]]; then
-        rm -rf "$user_dir"
-        log_success "Removed user directory: $user_dir"
+        rm -rf "$user_dir" || return 1
     fi
-
-    # Display success message
-    echo ""
     log_success "User '$username' removed successfully!"
-    echo ""
-
     return 0
-}
+)
 
 # ============================================================================
 # List All Users

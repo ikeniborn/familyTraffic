@@ -471,7 +471,7 @@ _configure_proxy_auth_jail() {
         elif grep -Eq '^\[(vless-http|vless-socks5|familytraffic-(proxy-auth|socks5|http)(-notls)?)\]' "$file"; then
             digest=$(sha256sum "$file"); digest="${digest%% *}"
             case "$digest" in
-                c0d29d92e1a9fba923d020dfc75d406c92443809e743c900d233943cfb8e968f|909749e197e8ad03e0fa98ed04aafa5cac0596017bb013bfc3a41c29e76abc67) legacy+=("$file") ;;
+                c0d29d92e1a9fba923d020dfc75d406c92443809e743c900d233943cfb8e968f|909749e197e8ad03e0fa98ed04aafa5cac0596017bb013bfc3a41c29e76abc67|18b6c73aac5e1d0dbb72da11e279eb5f3e30adb23021aa3c0a82f26a97c5b037) legacy+=("$file") ;;
                 *) echo "Unrecognized legacy proxy jail requires review: $file" >&2; return 1 ;;
             esac
         fi
@@ -515,6 +515,27 @@ sys.exit(0 if len(expected)==1 and actual==[("0",Regex(expected[0],useDns="no").
 ' "$2"
 }
 
+# Compare the live exemptions with Fail2ban's compiled operator configuration.
+_proxy_auth_ignoreip_matches() {
+    python3 - "$1" "$2" <<'PYTHON'
+import ast,ipaddress,sys
+expected=set()
+try:
+    for line in sys.argv[1].splitlines():
+        try:
+            command=ast.literal_eval(line)
+        except (ValueError,SyntaxError):
+            continue
+        if isinstance(command,list) and command[:3]==["set","familytraffic-proxy-auth","addignoreip"]:
+            expected.update(str(ipaddress.ip_network(value,strict=False)) for value in command[3:])
+    actual={str(ipaddress.ip_network(value,strict=False)) for value in sys.argv[2].split()}
+except (ValueError,TypeError):
+    sys.exit(1)
+required={"127.0.0.0/8","::1/128"}
+sys.exit(0 if required <= expected and actual==expected else 1)
+PYTHON
+}
+
 verify_proxy_auth_jail() {
     local ports="$1" jail=familytraffic-proxy-auth log="${FT_PROXY_AUTH_LOG:-/opt/familytraffic/logs/xray/auth.log}"
     local effective status_text dump value
@@ -538,7 +559,7 @@ verify_proxy_auth_jail() {
     [[ "$effective" == tcp ]] || return 1
     effective=$(fail2ban-client get "$jail" ignoreip) || return 1
     effective=$(printf '%s\n' "$effective" | grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}(/[0-9]+)?|[a-fA-F0-9]*:[a-fA-F0-9:]+(/[0-9]+)?' | sort) || return 1
-    [[ "$effective" == $'127.0.0.0/8\n::1' ]] || return 1
+    _proxy_auth_ignoreip_matches "$dump" "$effective" || return 1
     effective=$(fail2ban-client get "$jail" failregex) || return 1
     _proxy_auth_live_regex_matches "$dump" "$effective" || return 1
 }
