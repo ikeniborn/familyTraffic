@@ -352,6 +352,12 @@ main() {
     collect_parameters
     print_success "Parameters collected"
 
+    # Public proxy reconciliation requires active host firewall protection.
+    if [[ "$ENABLE_PUBLIC_PROXY" == "true" ]] && ! LC_ALL=C ufw status | grep -q '^Status: active$'; then
+        print_error 'UFW must be active before installing public proxies. Allow SSH access and enable UFW, then retry.'
+        exit 1
+    fi
+
     # Step 7.5: Acquire TLS certificate (v3.4) - only if public proxy + TLS enabled
     if [[ "$ENABLE_PUBLIC_PROXY" == "true" ]] && [[ "$ENABLE_PROXY_TLS" == "true" ]]; then
         print_message "${COLOR_BLUE}" "\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"

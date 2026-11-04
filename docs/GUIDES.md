@@ -586,3 +586,8 @@ active deployment: use `familytraffic-security reconcile` for existing deploymen
 
 If sudo reports `unable to resolve host`, check that `/etc/hosts` contains the
 hostname from `/etc/hostname`. This host configuration is separate from CLI setup.
+
+Public proxy installation requires active UFW protection. The installer checks
+this prerequisite after parameter collection, before certificates and deployment
+files are created. Allow the server's actual SSH port before enabling UFW, then
+retry installation. Reloading an inactive UFW does not activate it.
