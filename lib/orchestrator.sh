@@ -895,8 +895,12 @@ EOF
     local temp_file
     temp_file=$(mktemp)
 
-    jq ".metadata.created = \"${timestamp}\" | .metadata.last_modified = \"${timestamp}\"" \
-       "${USERS_JSON}" > "$temp_file" && write_preserving_inode "$temp_file" "${USERS_JSON}"
+    if ! jq ".metadata.created = \"${timestamp}\" | .metadata.last_modified = \"${timestamp}\"" \
+       "${USERS_JSON}" > "$temp_file" || ! write_preserving_inode "$temp_file" "${USERS_JSON}"; then
+        rm -f "$temp_file"
+        echo -e "${RED}Failed to initialize users database timestamps${NC}" >&2
+        return 1
+    fi
 
     if [[ ! -f "${USERS_JSON}" ]]; then
         echo -e "${RED}Failed to create ${USERS_JSON}${NC}" >&2
@@ -946,8 +950,12 @@ EOF
     local temp_file
     temp_file=$(mktemp)
 
-    jq ".metadata.created = \"${timestamp}\" | .metadata.last_modified = \"${timestamp}\"" \
-       "$proxy_ips_file" > "$temp_file" && write_preserving_inode "$temp_file" "$proxy_ips_file"
+    if ! jq ".metadata.created = \"${timestamp}\" | .metadata.last_modified = \"${timestamp}\"" \
+       "$proxy_ips_file" > "$temp_file" || ! write_preserving_inode "$temp_file" "$proxy_ips_file"; then
+        rm -f "$temp_file"
+        echo -e "${RED}Failed to initialize proxy whitelist timestamps${NC}" >&2
+        return 1
+    fi
 
     if [[ ! -f "$proxy_ips_file" ]]; then
         echo -e "${RED}Failed to create ${proxy_ips_file}${NC}" >&2

@@ -172,6 +172,7 @@ check_root() {
 source_libraries() {
     local lib_dir="${SCRIPT_DIR}/lib"
     local required_modules=(
+        "common.sh"
         "os_detection.sh"
         "dependencies.sh"
         "old_install_detect.sh"

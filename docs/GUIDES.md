@@ -572,3 +572,17 @@ sudo fail2ban-client status familytraffic-proxy-auth
 ```
 
 Use controlled clients in an isolated test environment for failure-to-ban tests. Do not trigger a ban from the active administrative source on a shared host.
+
+## Interrupted installation before CLI setup
+
+The installer loads `common.sh` before orchestration. User-management imports use
+`USER_MANAGEMENT_LIB_DIR` and preserve the installer's readonly `SCRIPT_DIR`.
+Users database and proxy whitelist initialization stop if timestamp persistence fails.
+
+If installation stops before CLI setup, `familytraffic` is not installed yet.
+Do not use `add-user` to resume an incomplete installation. Preserve the incomplete
+`/opt/familytraffic` directory before starting a fresh installation. Do not move an
+active deployment: use `familytraffic-security reconcile` for existing deployments.
+
+If sudo reports `unable to resolve host`, check that `/etc/hosts` contains the
+hostname from `/etc/hostname`. This host configuration is separate from CLI setup.

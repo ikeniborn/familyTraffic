@@ -129,7 +129,7 @@ setup() {
 
 @test "client export retains explicit mode without persisted settings" {
     source <(sed -n '/^export_all_proxy_configs()/,/^}/p' "$PROJECT_ROOT/lib/user_management.sh")
-    SCRIPT_DIR="$PROJECT_ROOT/lib"
+    USER_MANAGEMENT_LIB_DIR="$PROJECT_ROOT/lib"
     ENV_FILE="$state" CLIENTS_DIR="$BATS_TEST_TMPDIR/clients"
     PROXY_NOTLS_ENABLED=true
     log_info() { :; }
