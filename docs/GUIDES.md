@@ -595,3 +595,7 @@ retry installation. Reloading an inactive UFW does not activate it.
 The proxy security transaction also requires an image with authentication-journal
 support. Older `latest` images fail capability validation. Release `1.2.1` rebuilds
 the current image through the `test` branch pipeline; do not bypass this check.
+
+CLI installation resolves repository sources from the absolute library directory
+captured when orchestration loads. Deployment may change the current directory
+without changing where CLI source files are found.
