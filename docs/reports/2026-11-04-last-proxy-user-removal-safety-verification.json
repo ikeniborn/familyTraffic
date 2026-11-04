@@ -1,0 +1,95 @@
+{
+  "topic": "last-proxy-user-removal-safety",
+  "base_revision": "a5105b1d54cbc5d7581109184a9c89ffeac25456",
+  "source_sha256": {
+    "lib/user_management.sh": "c42a3ca6b7235c4eee580654c73507476f1a7c265f4904040de779213c0a5172",
+    "tests/unit/test_user_removal_safety.bats": "78116755846ef50482cd3ff570fef5cee42bd86057ccad475ca5992b258774b3"
+  },
+  "checks": [
+    {
+      "command": "bash -n lib/user_management.sh",
+      "exit_code": 0
+    },
+    {
+      "command": "bats tests/unit/test_user_removal_safety.bats",
+      "passed": 11,
+      "exit_code": 0
+    },
+    {
+      "command": "bats --print-output-on-failure tests/unit/",
+      "passed": 126,
+      "skipped": 2,
+      "exit_code": 0
+    },
+    {
+      "command": "bash tests/lint.sh",
+      "findings": 191,
+      "errors": 0,
+      "exit_code": 0
+    },
+    {
+      "command": "bats --count tests/integration/",
+      "count": 6,
+      "exit_code": 0
+    },
+    {
+      "command": "bats --count tests/performance/",
+      "count": 7,
+      "exit_code": 0
+    }
+  ],
+  "proxy_checks": [
+    {
+      "vantage": "external client",
+      "input": "http.txt",
+      "target": "https://example.com",
+      "curl_exit": 0,
+      "http_status": "200"
+    },
+    {
+      "vantage": "external client",
+      "input": "http.txt",
+      "target": "https://api.ipify.org",
+      "curl_exit": 0,
+      "http_status": "200",
+      "egress_ip": "82.38.64.171"
+    },
+    {
+      "vantage": "external client",
+      "input": "https.txt",
+      "target": "https://example.com",
+      "curl_exit": 0,
+      "http_status": "200"
+    },
+    {
+      "vantage": "external client",
+      "input": "https.txt",
+      "target": "https://api.ipify.org",
+      "curl_exit": 0,
+      "http_status": "200",
+      "egress_ip": "82.38.64.171"
+    }
+  ],
+  "server_change": "Only user-authorized removal of the existing client IP ban; removal code was not deployed.",
+  "limitations": [
+    "Proxy requests validate the running deployment. New removal behavior was exercised in isolated fixtures, not against live users.",
+    "iwiki binding rejected the configured scope; task and graph evidence remain completion-pending in the local spool."
+  ],
+  "graph": "graph_unavailable",
+  "proxy_ban_review": {
+    "maxretry": 5,
+    "findtime_seconds": 600,
+    "bantime_seconds": 3600,
+    "authorized_unban": "Applied once to the client address before the recorded successful external requests.",
+    "subsequent_state": "Client address automatically banned again after 5 further HTTP authentication failures within 31 seconds.",
+    "policy_change": "None. Repeated invalid authentication must be corrected in the client; successful requests using the supplied files were verified."
+  },
+  "outcome_evidence": {
+    "last_account_refusal": "Bats scenarios 1, 2 and 6: nonzero exit; database/configuration bytes and inodes and client files unchanged.",
+    "failed_application_preserves_user": "Scenarios 3, 7, 8 and 11: reload, partial mutation, database persistence and VPN persistence failures preserve user and restore config.",
+    "permitted_removal": "Scenario 4: bob remains in database and both receiver account lists, live model matches config, client exports removed.",
+    "unaffected_cases": "Scenarios 5 and 10: VPN-only and no-managed-receiver removal succeeds.",
+    "serialization": "Scenario 9: simultaneous removals leave one matching authenticated account.",
+    "real_proxy_access": "Recorded four successful external requests: both file inputs returned HTTP 200 for example.com and ipify; egress matches server IP. Subsequent ban is separately reported."
+  }
+}

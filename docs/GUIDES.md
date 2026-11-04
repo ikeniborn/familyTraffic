@@ -599,3 +599,22 @@ the current image through the `test` branch pipeline; do not bypass this check.
 CLI installation resolves repository sources from the absolute library directory
 captured when orchestration loads. Deployment may change the current directory
 without changing where CLI source files are found.
+
+## Safe user removal
+
+`familytraffic remove-user` refuses to remove the last authenticated account from
+any managed HTTP or SOCKS5 proxy receiver. Add another proxy account before removing
+that user. When managed public proxy receivers are absent, this restriction does
+not apply.
+
+Removal holds the existing user database lock through configuration validation,
+application, and database commit. The database and client exports remain unchanged
+until Xray accepts the new configuration. If configuration application or database
+persistence fails, the command reports failure and restores saved configuration
+without replacing bind-mounted file inodes. If recovery cannot reload Xray or
+restore a file, the command reports the problem and retains private recovery files
+for operator action. Do not treat a failed command as successful removal.
+
+Fail2ban can temporarily block the client address after repeated authentication
+failures. A healthy container and open UFW ports do not imply that a banned client
+can connect. Verify the credentials before explicitly removing an address ban.
