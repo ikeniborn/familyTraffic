@@ -609,8 +609,8 @@ files are created. Allow the server's actual SSH port before enabling UFW, then
 retry installation. Reloading an inactive UFW does not activate it.
 
 The proxy security transaction also requires an image with authentication-journal
-support. Older `latest` images fail capability validation. Release `1.2.1` rebuilds
-the current image through the `test` branch pipeline; do not bypass this check.
+support. Older `latest` images fail capability validation. Release `1.2.2` publishes
+the v2 username-journal image through the `test` branch pipeline; do not bypass this check.
 
 CLI installation resolves repository sources from the absolute library directory
 captured when orchestration loads. Deployment may change the current directory

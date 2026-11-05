@@ -61,7 +61,7 @@
     "requested_source_unbanned": true,
     "operator_exceptions": "preserved"
   },
-  "delivery": {"branch": "dev-proxy-auth-username-logging", "base": "test", "promotion": "test -> master through PR"},
+  "delivery": {"branch": "dev-proxy-auth-username-logging", "base": "test", "promotion": "test -> master through PR", "release_version": "1.2.2", "version_change": "Publication metadata only. The test-branch pipeline requires a VERSION change to publish the matching v2 image. Code verification inputs are unchanged."},
   "documentation": ["docs/GUIDES.md", "docs/SECURITY.md"],
   "wiki": {"state": "completion-pending", "reason": "Remote binding rejected the complete configured scope with domain_not_granted. No wiki mutations or scope narrowing were attempted. Redacted events are queued locally.", "code_graph": "graph_unavailable", "specification_resolution": "graph_unavailable"}
 }
