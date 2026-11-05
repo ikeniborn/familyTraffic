@@ -179,6 +179,6 @@ jobs:
         run: docker build -f docker/familytraffic/Dockerfile -t familytraffic:proxy-security .
       - name: Verify capability and Xray configuration
         run: |
-          test "$(docker run --rm --entrypoint cat familytraffic:proxy-security /etc/familytraffic/auth-journal-capability)" = ft-auth-journal-v1
+          test "$(docker run --rm --entrypoint cat familytraffic:proxy-security /etc/familytraffic/auth-journal-capability)" = ft-auth-journal-v2
           printf '%s\n' '{"inbounds":[],"outbounds":[{"protocol":"freedom"}]}' > /tmp/xray-check.json
           docker run --rm --entrypoint /usr/bin/xray -v /tmp/xray-check.json:/tmp/xray-check.json:ro familytraffic:proxy-security run -test -config /tmp/xray-check.json

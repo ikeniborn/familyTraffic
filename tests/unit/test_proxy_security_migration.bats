@@ -292,7 +292,8 @@ MOCK
     cat > "$BATS_TEST_TMPDIR/bin/curl" <<'MOCK'
 #!/bin/bash
 if [[ "${TEST_WRITE_EVENT:-false}" == true ]]; then
-    printf '%s FT_AUTH_FAILURE protocol=http src=127.0.0.2\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$TEST_EVENT_LOG"
+    user=$(sed -nE 's/^proxy-user = "([^:]+):.*$/\1/p' "$2")
+    printf '%s FT_AUTH_FAILURE protocol=http src=127.0.0.2 username="%s" truncated=false\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$user" >> "$TEST_EVENT_LOG"
 fi
 printf 407
 MOCK

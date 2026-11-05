@@ -12,7 +12,7 @@ setup() {
     configure_proxy_auth_jail 1080,1081,8118,8119
     grep -q '^backend = polling$' "$FT_FAIL2BAN_DIR/jail.d/familytraffic-proxy-auth.conf"
     grep -q '^usedns = no$' "$FT_FAIL2BAN_DIR/jail.d/familytraffic-proxy-auth.conf"
-    grep -q '^maxretry = 5$' "$FT_FAIL2BAN_DIR/jail.d/familytraffic-proxy-auth.conf"
+    grep -q '^maxretry = 15$' "$FT_FAIL2BAN_DIR/jail.d/familytraffic-proxy-auth.conf"
     grep -q '^findtime = 600$' "$FT_FAIL2BAN_DIR/jail.d/familytraffic-proxy-auth.conf"
     grep -q '^bantime = 3600$' "$FT_FAIL2BAN_DIR/jail.d/familytraffic-proxy-auth.conf"
     cp "$FT_FAIL2BAN_DIR/jail.d/familytraffic-proxy-auth.conf" "$BATS_TEST_TMPDIR/before"
@@ -37,10 +37,24 @@ setup() {
     configure_proxy_auth_jail 1080,8118
     run fail2ban-regex "$PROJECT_ROOT/tests/fixtures/proxy-auth-positive.log" "$FT_FAIL2BAN_DIR/filter.d/familytraffic-proxy-auth.conf"
     [ "$status" -eq 0 ]
-    [[ "$output" == *'4) [1] '* ]] || [[ "$output" == *'4 matched'* ]]
+    [[ "$output" == *'8 matched'* ]]
     run fail2ban-regex "$PROJECT_ROOT/tests/fixtures/proxy-auth-negative.log" "$FT_FAIL2BAN_DIR/filter.d/familytraffic-proxy-auth.conf"
     [ "$status" -eq 0 ]
     [[ "$output" == *'0 matched'* ]]
+}
+
+@test "upgrade preserves operator overrides and accepts only exact managed v1 policy" {
+    mkdir -p "$FT_FAIL2BAN_DIR/filter.d"
+    _render_proxy_auth_jail 1080,8118 "$FT_PROXY_AUTH_LOG" 5 > "$FT_FAIL2BAN_DIR/jail.d/familytraffic-proxy-auth.conf"
+    _render_proxy_auth_filter legacy > "$FT_FAIL2BAN_DIR/filter.d/familytraffic-proxy-auth.conf"
+    printf '[familytraffic-proxy-auth]\nignoreip = 127.0.0.0/8 ::1 192.0.2.17\nmaxretry = 15\n' > "$FT_FAIL2BAN_DIR/jail.d/familytraffic-proxy-auth.local"
+    cp "$FT_FAIL2BAN_DIR/jail.d/familytraffic-proxy-auth.local" "$BATS_TEST_TMPDIR/override"
+    configure_proxy_auth_jail 1080,8118
+    cmp "$FT_FAIL2BAN_DIR/jail.d/familytraffic-proxy-auth.local" "$BATS_TEST_TMPDIR/override"
+    grep -q '^maxretry = 15$' "$FT_FAIL2BAN_DIR/jail.d/familytraffic-proxy-auth.conf"
+    printf '\n# custom\n' >> "$FT_FAIL2BAN_DIR/filter.d/familytraffic-proxy-auth.conf"
+    run configure_proxy_auth_jail 1080,8118
+    [ "$status" -ne 0 ]
 }
 
 @test "live verification rejects wrong monitoring thresholds and action ports" {
@@ -50,7 +64,7 @@ setup() {
             '-t') return 0 ;;
             '-d') printf '%s\n' "['add', 'familytraffic-proxy-auth', 'polling']" "['set', 'familytraffic-proxy-auth', 'addfailregex', '^ FT_AUTH_FAILURE protocol=(?:http|socks)']" "['set', 'familytraffic-proxy-auth', 'addignoreip', '127.0.0.0/8', '::1']" ;;
             'status familytraffic-proxy-auth') echo "File list: $FT_PROXY_AUTH_LOG" ;;
-            'get familytraffic-proxy-auth maxretry') echo 5 ;;
+            'get familytraffic-proxy-auth maxretry') echo 15 ;;
             'get familytraffic-proxy-auth findtime') echo 600 ;;
             'get familytraffic-proxy-auth bantime') echo "${test_bantime:-3600}" ;;
             'get familytraffic-proxy-auth usedns') echo no ;;

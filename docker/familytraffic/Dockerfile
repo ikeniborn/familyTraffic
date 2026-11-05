@@ -67,7 +67,7 @@ RUN apk upgrade --no-cache \
     && mkdir -p /etc/familytraffic \
     && mkdir -p /var/log/xray \
     && install -m 600 /dev/null /var/log/xray/auth.log \
-    && printf 'ft-auth-journal-v1\n' > /etc/familytraffic/auth-journal-capability \
+    && printf 'ft-auth-journal-v2\n' > /etc/familytraffic/auth-journal-capability \
     && mkdir -p /var/www/html/.well-known/acme-challenge
 
 # Copy xray binary from Stage 1
