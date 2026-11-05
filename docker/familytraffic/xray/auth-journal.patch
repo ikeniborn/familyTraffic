@@ -1,10 +1,10 @@
 diff --git a/common/ftauth/journal.go b/common/ftauth/journal.go
 new file mode 100644
-index 0000000..6a9c26b
+index 0000000..5ae31f2
 --- /dev/null
 +++ b/common/ftauth/journal.go
-@@ -0,0 +1,45 @@
-+// Package ftauth writes credential-free authentication failure events.
+@@ -0,0 +1,51 @@
++// Package ftauth writes password-free authentication failure events.
 +package ftauth
 +
 +import (
@@ -13,15 +13,16 @@ index 0000000..6a9c26b
 +	"io"
 +	"net"
 +	"os"
++	"strconv"
 +	"time"
 +)
 +
 +// Record appends one event using a validated protocol and connection address.
-+func Record(protocol string, source net.Addr) error {
-+	return record("/var/log/xray/auth.log", time.Now(), protocol, source)
++func Record(protocol string, source net.Addr, username string) error {
++	return record("/var/log/xray/auth.log", time.Now(), protocol, source, username)
 +}
 +
-+func record(path string, now time.Time, protocol string, source net.Addr) error {
++func record(path string, now time.Time, protocol string, source net.Addr, username string) error {
 +	if protocol != "http" && protocol != "socks" {
 +		return errors.New("invalid authentication event protocol")
 +	}
@@ -29,7 +30,12 @@ index 0000000..6a9c26b
 +	if !ok || addr == nil || addr.Zone != "" || addr.IP.To16() == nil {
 +		return errors.New("invalid authentication event address")
 +	}
-+	line := fmt.Sprintf("%s FT_AUTH_FAILURE protocol=%s src=%s\n", now.UTC().Format("2006-01-02T15:04:05Z"), protocol, addr.IP.String())
++	// Bound untrusted input before quoting; escape controls and non-ASCII bytes.
++	truncated := len(username) > 128
++	if truncated {
++		username = username[:128]
++	}
++	line := fmt.Sprintf("%s FT_AUTH_FAILURE protocol=%s src=%s username=%s truncated=%t\n", now.UTC().Format("2006-01-02T15:04:05Z"), protocol, addr.IP.String(), strconv.QuoteToASCII(username), truncated)
 +	file, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0600)
 +	if err != nil {
 +		return errors.New("authentication journal open failed")
@@ -51,10 +57,10 @@ index 0000000..6a9c26b
 +}
 diff --git a/common/ftauth/journal_test.go b/common/ftauth/journal_test.go
 new file mode 100644
-index 0000000..c1c8cb8
+index 0000000..0381dfc
 --- /dev/null
 +++ b/common/ftauth/journal_test.go
-@@ -0,0 +1,91 @@
+@@ -0,0 +1,114 @@
 +package ftauth
 +
 +import (
@@ -72,11 +78,11 @@ index 0000000..c1c8cb8
 +	for _, ip := range []string{"192.0.2.10", "2001:0db8:0:0::1", "::ffff:192.0.2.10"} {
 +		path := filepath.Join(t.TempDir(), "auth.log")
 +		addr := &net.TCPAddr{IP: net.ParseIP(ip), Port: 1234}
-+		if err := record(path, now, "http", addr); err != nil {
++		if err := record(path, now, "http", addr, ""); err != nil {
 +			t.Fatal(err)
 +		}
 +		data, _ := os.ReadFile(path)
-+		want := "2026-10-31T11:00:00Z FT_AUTH_FAILURE protocol=http src=" + addr.IP.String() + "\n"
++		want := "2026-10-31T11:00:00Z FT_AUTH_FAILURE protocol=http src=" + addr.IP.String() + " username=\"\" truncated=false\n"
 +		if string(data) != want {
 +			t.Fatalf("got %q want %q", data, want)
 +		}
@@ -87,7 +93,7 @@ index 0000000..c1c8cb8
 +		if err := os.Rename(path, path+".1"); err != nil {
 +			t.Fatal(err)
 +		}
-+		if err := record(path, now, "socks", addr); err != nil {
++		if err := record(path, now, "socks", addr, ""); err != nil {
 +			t.Fatal(err)
 +		}
 +		old, _ := os.ReadFile(path + ".1")
@@ -99,12 +105,12 @@ index 0000000..c1c8cb8
 +func TestRejectUntrustedInput(t *testing.T) {
 +	path := filepath.Join(t.TempDir(), "auth.log")
 +	for _, protocol := range []string{"http\nforged", "HTTP", ""} {
-+		if record(path, time.Now(), protocol, &net.TCPAddr{IP: net.ParseIP("192.0.2.10")}) == nil {
++		if record(path, time.Now(), protocol, &net.TCPAddr{IP: net.ParseIP("192.0.2.10")}, "") == nil {
 +			t.Fatal("accepted protocol")
 +		}
 +	}
 +	for _, addr := range []net.Addr{nil, &net.TCPAddr{}, &net.UnixAddr{Name: "victim\n", Net: "unix"}} {
-+		if record(path, time.Now(), "http", addr) == nil {
++		if record(path, time.Now(), "http", addr, "") == nil {
 +			t.Fatal("accepted address")
 +		}
 +	}
@@ -115,15 +121,15 @@ index 0000000..c1c8cb8
 +func TestWriteFailures(t *testing.T) {
 +	addr := &net.TCPAddr{IP: net.ParseIP("192.0.2.10")}
 +	dir := t.TempDir()
-+	if record(dir, time.Now(), "http", addr) == nil {
++	if record(dir, time.Now(), "http", addr, "") == nil {
 +		t.Fatal("accepted directory")
 +	}
 +	path := filepath.Join(dir, "auth.log")
 +	os.WriteFile(path, nil, 0644)
-+	if record(path, time.Now(), "http", addr) == nil {
++	if record(path, time.Now(), "http", addr, "") == nil {
 +		t.Fatal("accepted unsafe permissions")
 +	}
-+	if record(filepath.Join(dir, "absent", "auth.log"), time.Now(), "http", addr) == nil {
++	if record(filepath.Join(dir, "absent", "auth.log"), time.Now(), "http", addr, "") == nil {
 +		t.Fatal("ignored open error")
 +	}
 +}
@@ -134,16 +140,39 @@ index 0000000..c1c8cb8
 +		wg.Add(1)
 +		go func() {
 +			defer wg.Done()
-+			if err := record(path, time.Unix(0, 0), "socks", &net.TCPAddr{IP: net.ParseIP("192.0.2.10")}); err != nil {
++			if err := record(path, time.Unix(0, 0), "socks", &net.TCPAddr{IP: net.ParseIP("192.0.2.10")}, ""); err != nil {
 +				t.Error(err)
 +			}
 +		}()
 +	}
 +	wg.Wait()
 +	data, _ := os.ReadFile(path)
-+	line := "1970-01-01T00:00:00Z FT_AUTH_FAILURE protocol=socks src=192.0.2.10\n"
++	line := "1970-01-01T00:00:00Z FT_AUTH_FAILURE protocol=socks src=192.0.2.10 username=\"\" truncated=false\n"
 +	if string(data) != strings.Repeat(line, 100) {
 +		t.Fatal("incomplete or extra lines")
++	}
++}
++
++func TestSuppliedUsername(t *testing.T) {
++	for _, tc := range []struct{ input, suffix string }{
++		{"ivan", `username="ivan" truncated=false`},
++		{"victim\nFT_AUTH_FAILURE\r\x00\"\\", `username="victim\nFT_AUTH_FAILURE\r\x00\"\\" truncated=false`},
++		{"юзер", `username="\u044e\u0437\u0435\u0440" truncated=false`},
++		{strings.Repeat("a", 128), `username="` + strings.Repeat("a", 128) + `" truncated=false`},
++		{strings.Repeat("a", 129), `username="` + strings.Repeat("a", 128) + `" truncated=true`},
++		{string([]byte{0xff}), `username="\xff" truncated=false`},
++	} {
++		path := filepath.Join(t.TempDir(), "auth.log")
++		if err := record(path, time.Now(), "http", &net.TCPAddr{IP: net.ParseIP("192.0.2.10")}, tc.input); err != nil {
++			t.Fatal(err)
++		}
++		data, err := os.ReadFile(path)
++		if err != nil {
++			t.Fatal(err)
++		}
++		if strings.Count(string(data), "\n") != 1 || !strings.HasSuffix(string(data), " "+tc.suffix+"\n") {
++			t.Fatalf("unexpected event: %q", data)
++		}
 +	}
 +}
 diff --git a/proxy/http/auth_journal_test.go b/proxy/http/auth_journal_test.go
@@ -177,7 +206,7 @@ index 0000000..5f81fc3
 +	}
 +}
 diff --git a/proxy/http/server.go b/proxy/http/server.go
-index 0121651..b64cb86 100644
+index 0121651..f94edc9 100644
 --- a/proxy/http/server.go
 +++ b/proxy/http/server.go
 @@ -13,6 +13,7 @@ import (
@@ -205,7 +234,7 @@ index 0121651..b64cb86 100644
  		user, pass, ok := parseBasicAuth(request.Header.Get("Proxy-Authorization"))
  		if !ok || !s.config.HasAccount(user, pass) {
 +			if s.credentialMismatch(request.Header.Get("Proxy-Authorization")) {
-+				if err := ftauth.Record("http", conn.RemoteAddr()); err != nil {
++				if err := ftauth.Record("http", conn.RemoteAddr(), user); err != nil {
 +					errors.LogWarning(ctx, "authentication protection error: journal write failed")
 +				}
 +			}
@@ -214,10 +243,10 @@ index 0121651..b64cb86 100644
  		if inbound != nil {
 diff --git a/proxy/socks/auth_journal_test.go b/proxy/socks/auth_journal_test.go
 new file mode 100644
-index 0000000..b3d9bcc
+index 0000000..6541c02
 --- /dev/null
 +++ b/proxy/socks/auth_journal_test.go
-@@ -0,0 +1,33 @@
+@@ -0,0 +1,39 @@
 +package socks
 +
 +import (
@@ -248,11 +277,17 @@ index 0000000..b3d9bcc
 +			if got := stderrors.Is(wrapped, ErrInvalidCredentials); got != tc.mismatch {
 +				t.Fatalf("mismatch=%v err=%v", got, err)
 +			}
++			if tc.mismatch && s.failedUsername != "u" {
++				t.Fatalf("lost supplied username: %q", s.failedUsername)
++			}
++			if !tc.mismatch && s.failedUsername != "" {
++				t.Fatal("recorded non-failure username")
++			}
 +		})
 +	}
 +}
 diff --git a/proxy/socks/protocol.go b/proxy/socks/protocol.go
-index 9bccf60..85c0ec3 100644
+index 9bccf60..7085505 100644
 --- a/proxy/socks/protocol.go
 +++ b/proxy/socks/protocol.go
 @@ -1,6 +1,7 @@
@@ -273,7 +308,23 @@ index 9bccf60..85c0ec3 100644
  var addrParser = protocol.NewAddressParser(
  	protocol.AddressFamilyByte(0x01, net.AddressFamilyIPv4),
  	protocol.AddressFamilyByte(0x04, net.AddressFamilyIPv6),
-@@ -118,14 +122,24 @@ func (s *ServerSession) auth5(nMethod byte, reader io.Reader, writer io.Writer)
+@@ -40,10 +44,11 @@ var addrParser = protocol.NewAddressParser(
+ )
+ 
+ type ServerSession struct {
+-	config       *ServerConfig
+-	address      net.Address
+-	port         net.Port
+-	localAddress net.Address
++	config         *ServerConfig
++	address        net.Address
++	port           net.Port
++	localAddress   net.Address
++	failedUsername string
+ }
+ 
+ func (s *ServerSession) handshake4(cmd byte, reader io.Reader, writer io.Writer) (*protocol.RequestHeader, error) {
+@@ -118,14 +123,25 @@ func (s *ServerSession) auth5(nMethod byte, reader io.Reader, writer io.Writer)
  	}
  
  	if expectedAuth == authPassword {
@@ -294,6 +345,7 @@ index 9bccf60..85c0ec3 100644
 +		}
  
  		if !s.config.HasAccount(username, password) {
++			s.failedUsername = username
  			writeSocks5AuthenticationResponse(writer, 0x01, 0xFF)
 -			return "", errors.New("invalid username or password")
 +			return "", ErrInvalidCredentials
@@ -301,7 +353,7 @@ index 9bccf60..85c0ec3 100644
  
  		if err := writeSocks5AuthenticationResponse(writer, 0x01, 0x00); err != nil {
 diff --git a/proxy/socks/server.go b/proxy/socks/server.go
-index 34c42ae..59ca56d 100644
+index 34c42ae..5b1b354 100644
 --- a/proxy/socks/server.go
 +++ b/proxy/socks/server.go
 @@ -2,12 +2,14 @@ package socks
@@ -324,7 +376,7 @@ index 34c42ae..59ca56d 100644
  	request, err := svrSession.Handshake(reader, conn)
  	if err != nil {
 +		if stderrors.Is(err, ErrInvalidCredentials) {
-+			if err := ftauth.Record("socks", conn.RemoteAddr()); err != nil {
++			if err := ftauth.Record("socks", conn.RemoteAddr(), svrSession.failedUsername); err != nil {
 +				errors.LogWarning(ctx, "authentication protection error: journal write failed")
 +			}
 +		}

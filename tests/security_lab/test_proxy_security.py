@@ -16,6 +16,7 @@ IMAGE = os.environ["FT_LAB_IMAGE"]
 COMPOSE = [os.environ.get("FT_LAB_COMPOSE", "docker"), *([] if os.environ.get("FT_LAB_COMPOSE") else ["compose"]), "-f", str(ROOT / "tests/security_lab/compose.yml")]
 PORTS = (1080, 1081, 8118, 8119)
 JAIL = "familytraffic-proxy-auth"
+USERNAME_FIELDS = r' username="(?:[^"\\\r\n]|\\[^\r\n]){0,512}" truncated=(?:true|false)'
 ARTIFACTS = Path(os.environ["FT_LAB_ARTIFACT_DIR"])
 
 
@@ -68,7 +69,7 @@ class Lab:
 
     def reset(self):
         self.fail2ban("unban", "--all")
-        self.fail2ban("set", JAIL, "maxretry", "5")
+        self.fail2ban("set", JAIL, "maxretry", "15")
         self.fail2ban("set", JAIL, "bantime", "3600")
         # Reset the tracked failure counters as well as bans between scenarios.
         self.fail2ban("reload", "--restart", JAIL)
@@ -144,7 +145,7 @@ class ProxySecurityTests(unittest.TestCase):
                 self.lab.fetch("offender", expected=407, password="wrong")
             events = self.lab.events()[before:]
             self.assertEqual(len(events), 5)
-            self.assertTrue(all(event.endswith(" src=127.0.0.1") for event in events))
+            self.assertTrue(all(' src=127.0.0.1 username="fixture-user" truncated=false' in event for event in events))
             self.lab.wait_banned("offender", False)
             self.lab.fetch("offender")
             (ARTIFACTS / "legacy-hop-control.txt").write_text("Five wrong credentials produced loopback source; offender remained reachable.\n")
@@ -189,12 +190,16 @@ class ProxySecurityTests(unittest.TestCase):
         events = self.lab.events()[before:]
         self.assertEqual(len(events), 3)
         for event in events:
-            self.assertRegex(event, rf"^\d{{4}}-\d{{2}}-\d{{2}}T\d{{2}}:\d{{2}}:\d{{2}}Z FT_AUTH_FAILURE protocol=(http|socks) src={re.escape(self.lab.address('offender'))}$")
-        self.assertNotIn("192.0.2.99", "\n".join(events))
+            self.assertRegex(event, rf"^\d{{4}}-\d{{2}}-\d{{2}}T\d{{2}}:\d{{2}}:\d{{2}}Z FT_AUTH_FAILURE protocol=(http|socks) src={re.escape(self.lab.address('offender'))}" + USERNAME_FIELDS + "$" )
+        self.assertIn(r'username="victim\nFT_AUTH_FAILURE protocol=http src=192.0.2.99" truncated=false', events[0])
 
     def test_04_aggregate_ban_isolates_offender_and_allows_ip_change(self):
-        for index in range(5):
+        for index in range(14):
             self.lab.fetch("offender", PORTS[index % 4], expected=407, password="wrong")
+        time.sleep(1)
+        self.lab.wait_banned("offender", False)
+        self.lab.fetch("offender")
+        self.lab.fetch("offender", 1081, expected=407, password="wrong")
         self.lab.wait_banned("offender")
         for port in PORTS:
             self.assertNotEqual(self.lab.probe("offender", port, "connect").returncode, 0)
@@ -210,7 +215,7 @@ class ProxySecurityTests(unittest.TestCase):
     def test_05_expiry(self):
         self.assertEqual(self.lab.fail2ban("get", JAIL, "bantime").stdout.strip(), "3600")
         self.lab.fail2ban("set", JAIL, "bantime", "4")
-        for _ in range(5):
+        for _ in range(15):
             self.lab.fetch("offender", expected=407, password="wrong")
         self.lab.wait_banned("offender")
         self.lab.wait_banned("offender", False, timeout=15)
@@ -226,12 +231,12 @@ class ProxySecurityTests(unittest.TestCase):
         self.assertEqual((LAB / "logs/auth.log.1").read_text().splitlines(), previous)
         self.assertEqual(len(self.lab.events()), 1)
         self.lab.fail2ban("reload", "--restart", JAIL)
-        for _ in range(5):
+        for _ in range(15):
             self.lab.fetch("offender", 1081, expected=407, password="wrong")
         self.lab.wait_banned("offender")
 
     def test_07_firewall_reload_preserves_ban(self):
-        for _ in range(5):
+        for _ in range(15):
             self.lab.fetch("offender", expected=407, password="wrong")
         self.lab.wait_banned("offender")
         snapshot = "iptables -S INPUT; iptables -S f2b-familytraffic-proxy-auth; ufw status numbered"
@@ -244,7 +249,7 @@ class ProxySecurityTests(unittest.TestCase):
     def test_08_empty_accounts_and_image_capability(self):
         self.lab.node("printf '%s\\n' '{\"inbounds\":[{\"tag\":\"http-proxy\",\"protocol\":\"http\",\"settings\":{\"accounts\":[]}}]}' > /tmp/empty.json; source /repo/lib/proxy_security.sh; if validate_proxy_auth_config /tmp/empty.json; then exit 1; fi")
         marker = self.lab.compose("exec", "-T", "proxy", "cat", "/etc/familytraffic/auth-journal-capability").stdout
-        self.assertEqual(marker, "ft-auth-journal-v1\n")
+        self.assertEqual(marker, "ft-auth-journal-v2\n")
 
 
     def test_09_concurrent_writes_during_rotation(self):
@@ -260,8 +265,24 @@ class ProxySecurityTests(unittest.TestCase):
         events = (LAB / "logs/auth.log.concurrent").read_text().splitlines() + self.lab.events()
         self.assertEqual(len(events) - before, 20)
         for event in events:
-            self.assertRegex(event, r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z FT_AUTH_FAILURE protocol=(http|socks) src=[0-9a-f:.]+$")
+            self.assertRegex(event, r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z FT_AUTH_FAILURE protocol=(http|socks) src=[0-9a-f:.]+" + USERNAME_FIELDS + "$" )
         self.lab.reset()
+
+    def test_10_supplied_usernames_are_bounded_and_password_free(self):
+        before = len(self.lab.events())
+        for port in (8119, 1081):
+            self.lab.fetch("offender", port, expected=407, user='attempted-user', password='private-probe-password')
+            self.lab.fetch("offender", port, expected=407, user='victim\n"\\', password='private-probe-password')
+            self.lab.fetch("offender", port, expected=407, user='a' * 129, password='private-probe-password')
+        events = self.lab.events()[before:]
+        self.assertEqual(len(events), 6)
+        for index in (0, 3):
+            self.assertTrue(events[index].endswith(' username="attempted-user" truncated=false'))
+            self.assertTrue(events[index + 1].endswith(r' username="victim\n\"\\" truncated=false'))
+            self.assertTrue(events[index + 2].endswith(' username="' + 'a' * 128 + '" truncated=true'))
+        self.assertNotIn('private-probe-password', '\n'.join(events))
+        self.assertNotIn('Proxy-Authorization', '\n'.join(events))
+        self.lab.fetch()
 
 
 if __name__ == "__main__":

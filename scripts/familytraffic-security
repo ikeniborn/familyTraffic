@@ -105,7 +105,7 @@ security_reconcile() {
 security_image_capability() {
     local image="$1" marker
     marker=$(docker run --rm --pull never --network none --entrypoint cat "$image" /etc/familytraffic/auth-journal-capability) || return 1
-    [[ "$marker" == ft-auth-journal-v1 ]]
+    [[ "$marker" == ft-auth-journal-v2 ]]
 }
 
 security_user_fingerprint() {
@@ -275,7 +275,7 @@ while True:
         if current.st_ino==before.st_ino:log.seek(before.st_size)
         lines=log.read().splitlines()
     for line in lines:
-        if re.fullmatch(rb'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z FT_AUTH_FAILURE protocol=http src=127\.0\.0\.2',line):
+        if re.fullmatch(rb'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z FT_AUTH_FAILURE protocol=http src=127\.0\.0\.2 username="'+user.encode()+rb'" truncated=false',line):
             timestamp=datetime.datetime.strptime(line[:20].decode(),'%Y-%m-%dT%H:%M:%SZ').replace(tzinfo=datetime.timezone.utc).timestamp()
             if abs(time.time()-timestamp)<=10:raise SystemExit(0)
     if time.monotonic()>=deadline:raise SystemExit('Controlled authentication rejection produced no fresh journal event')
@@ -315,7 +315,7 @@ security_inspect() {
     [[ -f "$SECURITY_LOG" && ! -L "$SECURITY_LOG" && "$(stat -c %a "$SECURITY_LOG")" == 600 ]] || return 1
     mounts=$(docker inspect --format '{{json .Mounts}}' familytraffic) || return 1
     security_validate_journal_mounts "$mounts" "$(dirname "$SECURITY_LOG")" || return 1
-    [[ "$(docker exec familytraffic cat /etc/familytraffic/auth-journal-capability)" == ft-auth-journal-v1 ]] || return 1
+    [[ "$(docker exec familytraffic cat /etc/familytraffic/auth-journal-capability)" == ft-auth-journal-v2 ]] || return 1
     if [[ -f "$SECURITY_OVERRIDE" ]]; then
         expected_image=$(sed -nE 's/^[[:space:]]+image: (sha256:[a-f0-9]{64})$/\1/p' "$SECURITY_OVERRIDE")
         actual_image=$(docker inspect --format '{{.Image}}' familytraffic) || return 1

@@ -1,0 +1,67 @@
+{
+  "topic": "proxy-auth-username-logging",
+  "date": "2026-11-05",
+  "workflow": {"route": "chain", "continuation": "execute", "spec": "n/a", "plan": "n/a"},
+  "intent": "docs/superpowers/intents/2026-11-05-proxy-auth-username-logging-intent.md",
+  "intent_hash": "7515993be70fc4b6",
+  "base_revision": "1ef69b346cffd834d12cb231ed4735b8ae0cd967",
+  "code_diff_sha256": "9aa2db243b497d6f222383ffad6ea407677bae30c6a9247cd76e30ae95c3b0ad",
+  "code_diff_scope": ".github/workflows/build-and-push.yml docker/familytraffic/Dockerfile docker/familytraffic/xray/auth-journal.patch lib/fail2ban_setup.sh scripts/familytraffic-security tests/fixtures/proxy-auth-negative.log tests/fixtures/proxy-auth-positive.log tests/security_lab/test_proxy_security.py tests/unit/test_proxy_fail2ban.bats tests/unit/test_proxy_security_migration.bats",
+  "evidence_log_sha256": {
+    "unit": "50cb5bb10b15db220b7b247dceb3da33b794d6be17bc5db34826b1f604926976",
+    "xray_full": "88587db3c05a0494b6940eebe84019a8769b043ca5de2d499975e71540eb18c9",
+    "network_lab": "189cebce304095d594c10254ecaae7722371f82988223ba0bd0754a1c7e285d2",
+    "transaction_lab": "48b85251b87431773aa647707797aa90e58742547450c98cf746a4f06343b800"
+  },
+  "source_sha256": {
+    "docker/familytraffic/xray/auth-journal.patch": "81ab1b59cc718189bb7aab6ec7b37a53654248511e68df8e8567bde1a371bca0",
+    "lib/fail2ban_setup.sh": "84423590f5629c2fb09be8ec46af0e018ef279bb6bdac9b1e839eefd91b257fa",
+    "scripts/familytraffic-security": "035b7be238797ed85a79d96c98695281ed0f011615925ff3796bd5c0692fe75a",
+    "tests/security_lab/test_proxy_security.py": "28964c31e649a3a5b17e1ab3b66a988e47e89fc4206a8524a21ff58752c9103a"
+  },
+  "checks": [
+    {"command": "bash -n lib/fail2ban_setup.sh scripts/familytraffic-security", "exit_status": 0},
+    {"command": "python3 -m py_compile tests/security_lab/test_proxy_security.py", "exit_status": 0},
+    {"command": "bats tests/unit/", "exit_status": 0, "tests": 132},
+    {"command": "go test -race ./common/ftauth ./proxy/http ./proxy/socks", "scope": "pinned patched Xray checkout", "exit_status": 0},
+    {"command": "sh docker/familytraffic/xray/build.sh all", "scope": "full pinned patched Xray upstream suite with verified release geodata", "exit_status": 0},
+    {"command": "bash tests/security_lab/run.sh --image familytraffic:proxy-auth-username", "exit_status": 0, "network_scenarios": 11, "additional_migration_tests": 19},
+    {"command": "python3 tests/security_lab/transaction_lab.py --image familytraffic:proxy-auth-username --dind-image fb-publication-dind-base:29", "exit_status": 0, "checks": ["real image/configuration migration", "injected post-policy failure and rollback", "incompatible-image refusal"]},
+    {"command": "git diff --check", "exit_status": 0}
+  ],
+  "tdd": {
+    "red": "The old journal omitted username; generated jail and live verifier used threshold 5. Updated tests failed on those behaviors before implementation.",
+    "green": "Journal race tests, generated policy tests, full suites, real network acceptance, and live deployment checks passed."
+  },
+  "acceptance": {
+    "identity": "HTTP and SOCKS mismatches include the supplied username; it remains an unverified identity.",
+    "injection": "Controls and non-ASCII input are ASCII-quoted. Input is limited to 128 bytes with an explicit truncation flag. Test passwords and complete authorization headers are absent from emitted events.",
+    "threshold": "Real isolated clients remain unbanned after 14 failures and are blocked after the 15th; a second client and SSH/Reality paths remain available.",
+    "regressions": "Valid authenticated traffic, challenge/malformed eligibility, source attribution, expiry, rotation, concurrent writes, jail restart, firewall reload, and rollback passed."
+  },
+  "review": {"agent": "/root/review_proxy_auth", "role": "independent read-only code review", "actionable_findings": 0},
+  "deployment": {
+    "host": "ikenibornsw",
+    "local_image": "sha256:d855cdfb25667c9cceba61b8fce70e77bf4b2b2ddbd36e5fb749002ff41f71b7",
+    "server_image": "sha256:109382ff2f1f3a4b315f92ddf83880a065210234f200e32c8870fb1678a38249",
+    "image_transfer_verification": "All RootFS layer digests and the Xray binary SHA-256 match despite the different Docker image IDs.",
+    "xray_binary_sha256": "b5967246e698398ccaa6bc8e9e156b3b3d4d96fe2ed1fa063377f392fadf9c88",
+    "previous_image": "sha256:2f2b5b09f958cb343f6ea08f7e795419e2af2ef50928fb834f160d6363dedffe",
+    "backup": "/opt/familytraffic/backup/proxy-auth-username-logging-20261105",
+    "reconcile_exit_status": 0,
+    "security_check_exit_status": 0,
+    "live_probe": "Existing HTTP and SOCKS accounts fetched HTTPS successfully. Four controlled failures logged the supplied username, including escaped injection input. The probe password and authorization header were absent.",
+    "live_probe_exit_status": 0,
+    "live_probe_sha256": "898c14a11c9d38c7dfad57ba7a39124cff7bcd56376e5ecee7dd72afedc59ec8",
+    "health": "healthy",
+    "maxretry": 15,
+    "findtime_seconds": 600,
+    "bantime_seconds": 3600,
+    "active_proxy_bans": 0,
+    "requested_source_unbanned": true,
+    "operator_exceptions": "preserved"
+  },
+  "delivery": {"branch": "dev-proxy-auth-username-logging", "base": "test", "promotion": "test -> master through PR", "release_version": "1.2.2", "version_change": "Publication metadata only. The test-branch pipeline requires a VERSION change to publish the matching v2 image. Code verification inputs are unchanged."},
+  "documentation": ["docs/GUIDES.md", "docs/SECURITY.md"],
+  "wiki": {"state": "completion-pending", "reason": "Remote binding rejected the complete configured scope with domain_not_granted. No wiki mutations or scope narrowing were attempted. Redacted events are queued locally.", "code_graph": "graph_unavailable", "specification_resolution": "graph_unavailable"}
+}

@@ -10,3 +10,8 @@ X-Forwarded-For: 192.0.2.10
 2026-10-31T12:00:00Z FT_AUTH_FAILURE protocol=evil src=192.0.2.10
 2026-10-31T12:00:00Z FT_AUTH_FAILURE protocol=http src=192.0.2.10:1234
 2026-10-31T12:00:00Z FT_AUTH_FAILURE protocol=http src=999.999.999.999
+2026-11-05T12:00:00Z FT_AUTH_FAILURE protocol=http src=127.0.0.1 username="ivan" truncated=false
+2026-11-05T12:00:00Z FT_AUTH_FAILURE protocol=socks src=::1 username="ivan" truncated=false
+2026-11-05T12:00:00Z FT_AUTH_FAILURE protocol=http src=192.0.2.10 username="ivan"
+2026-11-05T12:00:00Z FT_AUTH_FAILURE protocol=http src=192.0.2.10 username="unescaped"quote" truncated=false
+2026-11-05T12:00:00Z FT_AUTH_FAILURE protocol=http src=192.0.2.10 username="ivan" truncated=false src=192.0.2.99
