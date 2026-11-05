@@ -1,5 +1,5 @@
-read = ["familyTraffic","familyBudget"]
-write = ["familyTraffic","familyBudget"]
+read = ["familyTraffic","familybudget", "minipc"]
+write = ["familyTraffic","familybudget", "minipc"]
 primary = "familyTraffic"
 
 [code_graph]
