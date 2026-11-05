@@ -563,7 +563,23 @@ sudo familytraffic-security check
 
 A nonzero result means protection has not been verified. Resolve the diagnostic before treating deployment as successful. General process health alone does not prove authentication, source attribution, or bans.
 
-The proxy client address may change. No fixed client-IP allowlist is required. Five credential failures in 600 seconds ban the source IP on enabled proxy ports for 3600 seconds. An IP ban affects all clients sharing that public NAT address.
+The proxy client address may change. No fixed client-IP allowlist is required. Fifteen credential failures in 600 seconds ban the source IP on enabled proxy ports for 3600 seconds. An IP ban affects all clients sharing that public NAT address.
+
+The v2 authentication journal records the supplied username for parsed HTTP and SOCKS credential mismatches. This name is unverified. Missing credentials and malformed requests retain their existing counting behavior. Passwords and full authorization headers are not recorded.
+
+```text
+2026-11-05T12:00:00Z FT_AUTH_FAILURE protocol=http src=192.0.2.10 username="ivan" truncated=false
+```
+
+Read recent authentication failures as an administrator:
+
+```bash
+sudo tail -n 100 /opt/familytraffic/logs/xray/auth.log
+```
+
+Names use Go ASCII string quoting, including escaped controls and non-ASCII characters. Only the first 128 input bytes are retained; `truncated=true` marks an incomplete name. The log remains mode 0600 with weekly rotation and four retained archives.
+
+Deploy v2 with the matching `familytraffic-security` script and libraries. Reconciliation accepts only exact historical managed jail/filter files, preserves the operator `.local` file, and verifies the effective threshold of 15. Customized managed files still require review. The v2 capability check rejects old images; use the existing transaction rollback to restore the previous image and policy together.
 
 Inspect the jail without displaying credentials:
 
@@ -593,8 +609,8 @@ files are created. Allow the server's actual SSH port before enabling UFW, then
 retry installation. Reloading an inactive UFW does not activate it.
 
 The proxy security transaction also requires an image with authentication-journal
-support. Older `latest` images fail capability validation. Release `1.2.1` rebuilds
-the current image through the `test` branch pipeline; do not bypass this check.
+support. Older `latest` images fail capability validation. Release `1.2.2` publishes
+the v2 username-journal image through the `test` branch pipeline; do not bypass this check.
 
 CLI installation resolves repository sources from the absolute library directory
 captured when orchestration loads. Deployment may change the current directory
