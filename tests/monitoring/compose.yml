@@ -1,0 +1,46 @@
+services:
+  node:
+    image: ${FT_TRAFFIC_NODE_IMAGE:-familytraffic-security-node:local}
+    volumes:
+      - ${FT_TRAFFIC_LAB}:/lab
+    networks: [lab]
+  proxy:
+    image: ${FT_TRAFFIC_IMAGE:-familytraffic:proxy-auth-username}
+    network_mode: service:node
+    depends_on: [node]
+    entrypoint: [/usr/bin/supervisord, -c, /etc/familytraffic/supervisord.conf]
+    volumes:
+      - ${FT_TRAFFIC_LAB}/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ${FT_TRAFFIC_LAB}/xray.json:/etc/xray/config.json:ro
+      - ${FT_TRAFFIC_LAB}/certs:/etc/letsencrypt/live/proxy.lab:ro
+      - ${FT_TRAFFIC_LAB}/logs:/var/log/xray
+      - ${FT_TRAFFIC_LAB}/nginx-logs:/var/log/nginx
+  exporter:
+    image: ${FT_TRAFFIC_IMAGE:-familytraffic:proxy-auth-username}
+    network_mode: service:node
+    entrypoint: [/lab/exporter, --config, /lab/exporter.json]
+    volumes:
+      - ${FT_TRAFFIC_LAB}:/lab
+  target:
+    image: ${FT_TRAFFIC_NODE_IMAGE:-familytraffic-security-node:local}
+    entrypoint: [python3, /lab/origin.py]
+    volumes:
+      - ${FT_TRAFFIC_LAB}:/lab:ro
+    networks:
+      lab:
+        aliases: [target.lab]
+  valid:
+    image: ${FT_TRAFFIC_NODE_IMAGE:-familytraffic-security-node:local}
+    volumes:
+      - ${FT_TRAFFIC_LAB}:/lab:ro
+    networks: [lab]
+  xray-client:
+    image: ${FT_TRAFFIC_IMAGE:-familytraffic:proxy-auth-username}
+    network_mode: service:valid
+    depends_on: [valid]
+    entrypoint: [/usr/bin/xray, run, -config, /lab/client.json]
+    volumes:
+      - ${FT_TRAFFIC_LAB}:/lab:ro
+networks:
+  lab:
+    internal: true

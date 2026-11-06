@@ -2,7 +2,7 @@
 chain:
   intent: docs/superpowers/intents/2026-11-05-proxy-vless-traffic-monitoring-intent.md
 review:
-  spec_hash: bb2646e2295223e9
+  spec_hash: 396058681da7d3d8
   last_run: 2026-11-05
   phases:
     structure: { status: passed }
@@ -52,7 +52,7 @@ Enable stats, StatsService and the required user/inbound/outbound policy flags. 
 
 Retain current proxy listeners and routing. Do not split inbounds or rename credentials to manufacture protocol-specific user counters.
 
-Enable Xray access logging independently of FT_DEBUG. Keep warning-level errors. Tail access, authentication, error, Fail2ban, and a minimal Nginx stream access log. Nginx logs include listener port, client IP, session status, duration and sent/received bytes; no credentials or URLs.
+Enable Xray access logging independently of FT_DEBUG. Keep warning-level errors. Tail access, error, Fail2ban, and a minimal Nginx stream access log. Preserve the authentication journal mode 0600; the fixed-command root helper publishes only durable aggregate HTTP/SOCKS authentication-failure counters in its sanitized snapshot. Nginx logs include listener port, client IP, session status, duration and sent/received bytes; no credentials or URLs.
 
 The exporter serves /metrics from a dedicated port reachable only by the monitoring source. Reuse the established source-restriction pattern after verifying the actual scraper egress. Keep the API private. Run unprivileged; use restricted log groups and a narrowly scoped read-only Fail2ban helper.
 
@@ -125,7 +125,7 @@ PromQL increase extrapolates interval edges. User volume is a monitoring estimat
 ## Errors and blocking
 Separate claimed identity, authenticated activity, and IP bans.
 
-Parse FT_AUTH_FAILURE with its escaping and truncation rules. Classify protocol failures without promoting attempted usernames to authenticated users. Classify warning errors with bounded categories and an unknown category; parsing failures remain visible.
+Parse FT_AUTH_FAILURE inside the fixed-command root helper with its escaping and truncation rules. Keep its raw journal at mode 0600 and never expose attempted usernames through the snapshot. Classify protocol failures without promoting attempted usernames to authenticated users. Classify warning errors with bounded categories and an unknown category; parsing failures remain visible.
 
 Checkpoint Fail2ban logs for ban/unban/restore counts. Read current status for gauges. Restore after restart is not a new attack ban. Reconcile jail count and detailed IP state without assuming missing logs mean zero bans.
 

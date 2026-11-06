@@ -1,0 +1,26 @@
+[Unit]
+Description=familyTraffic native statistics and access analytics exporter
+After=network.target docker.service
+
+[Service]
+User=familytraffic-exporter
+Group=familytraffic-monitoring
+ExecStart=/usr/local/bin/familytraffic-exporter --config /etc/familytraffic-exporter/config.json
+Restart=on-failure
+RestartSec=5
+StateDirectory=familytraffic-exporter
+StateDirectoryMode=0700
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+CapabilityBoundingSet=
+MemoryMax=192M
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,8 @@
+# Merge this job into the existing scrape_configs; retain all other jobs.
+- job_name: familytraffic
+  scrape_interval: 15s
+  scrape_timeout: 10s
+  static_configs:
+    - targets: ['82.38.64.171:9915']
+      labels:
+        instance: ikenibornsw

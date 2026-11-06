@@ -3,7 +3,7 @@ chain:
   intent: docs/superpowers/intents/2026-11-05-proxy-vless-traffic-monitoring-intent.md
   spec: docs/superpowers/specs/2026-11-05-proxy-vless-traffic-monitoring-design.md
 review:
-  plan_hash: a956cbd022f0a24a
+  plan_hash: 2317eb0ed3b3b27f
   last_run: 2026-11-06
   phases:
     structure: { status: passed }
@@ -165,7 +165,7 @@ Closes O4/O5: supplies errors and current/historical blocking with least privile
 
 - [ ] Add auth-journal escaping/truncation fixtures and fixed error categories with unknown. Do not use attempted usernames as metric labels or authenticated identity.
 - [ ] Parse ban/unban/restore as distinct actions with durable offsets. Test restart and log rotation independently from current-state reads.
-- [ ] Implement a root-owned helper with a fixed jail list and fixed executable paths. It invokes only read-only Fail2ban status commands with timeouts and atomically writes a sanitized snapshot. No caller arguments or arbitrary command execution are accepted.
+- [ ] Implement a root-owned helper with a fixed jail list and fixed executable paths. It invokes only read-only Fail2ban status commands with timeouts and reads the existing mode-0600 auth journal to aggregate protocol-only auth counters. Persist journal identity/offset and aggregate counters crash-safely, then atomically publish a sanitized snapshot. Do not chmod or add ACL access to auth.log. No caller arguments or arbitrary command execution are accepted.
 - [ ] Schedule the helper every 15 seconds. Mark snapshots older than 60 seconds unavailable. A failed helper must not overwrite valid state with a false empty ban list.
 - [ ] Cap detailed active-IP series at 1,000 per node, publish overflow, and keep jail totals complete. Do not label banned IPs as banned users.
 - [ ] Package the exporter as an unprivileged systemd service with a private state directory, read-only input access and no Docker socket. Keep executable/config files root-owned.

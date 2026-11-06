@@ -41,6 +41,7 @@ services:
       - /opt/familytraffic/config/supervisord.d:/opt/familytraffic/config/supervisord.d:ro
       # xray logs — mounted to host so fail2ban can read /opt/familytraffic/logs/xray/
       - /opt/familytraffic/logs/xray:/var/log/xray
+      - /opt/familytraffic/logs/nginx:/var/log/nginx
     env_file:
       - /opt/familytraffic/.env
     logging:
