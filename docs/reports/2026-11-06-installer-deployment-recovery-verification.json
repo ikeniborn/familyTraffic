@@ -1,0 +1,280 @@
+{
+  "topic": "installer-deployment-recovery",
+  "date": "2026-11-06",
+  "route": "chain",
+  "continuation": "execute",
+  "spec": "n/a",
+  "plan": "n/a",
+  "intent_hash": "36706f0ef0e6019e",
+  "verified_repository_revision": "cb4a781d3eb19a0bfaabd307dbfb444afe0d046b",
+  "code_state_sha256": "71ca901c8b5c1980cb8e5e3f028da534dfce940d32643170fdc4bbe5a4a49e5f",
+  "source_sha256": {
+    "VERSION": "d82f34ae9aa41bc4a0cb529a1ac0898fed09d6b479fb1cc44cb66c34f15ee84d",
+    "install.sh": "02e53b87c2c83bf056f2e5e12697e9e72d13bacda4590542762bf403d2ea6107",
+    "lib/fail2ban_setup.sh": "113261869a6b23d8c3b957e69b80c29b575c5530528f9454ce6b24501ebd99f8",
+    "lib/installer_security.sh": "ac2e08d4c8ffdda16ed66a844e10dc05fdd449979fc2b096d57ef370151713b3",
+    "lib/interactive_params.sh": "88d1bf637bc016559c066204e2e555f7433877623458b4821432dce4a365b6a1",
+    "lib/orchestrator.sh": "6e60f0bcd99f0c57523b4339bfba59842b0161bf83d3257c786aafb2afd89917",
+    "lib/proxy_security.sh": "fcf7f0bd14191afbc1ef609fa61bc88c1ad9031dad11f68f5fac38c2aea78870",
+    "lib/user_management.sh": "b1c18d7c146f376732150600055ad6f6ab8823f9eee759cecfd8c5c38a215721",
+    "scripts/familytraffic-security": "d8799f10730f82c6aaaaeb8b2afd364e78a39da2ce5d59237451e940e62dd16a",
+    "tests/integration/test_deferred_proxy.py": "01439097aa8393ec2a2bd3da7c566b2a59a71d9483d65e54f7a535caf50a0cd4",
+    "tests/integration/test_installer_firewall.py": "80c120541f3d9216b3d86b64138e49d3a6f3bfa81c9b12e83f3c95949b1d5f02",
+    "tests/security_lab/test_proxy_security.py": "3fd4bffe211b8b696aa2c30a68f1fc9aa35b87fd1832ad292ae40cfc9108301f",
+    "tests/unit/test_install_acme.bats": "00ff5a82b99c93df36bdf69519d80c8589aa6bc405f91e4b839fc2fd941dba6d",
+    "tests/unit/test_installer_runtime.bats": "a84cdff093c9895d460a13403edb8f30ca598156342ae1e084c703c2e6f57d45",
+    "tests/unit/test_installer_security_setup.bats": "e26a5f5fe97a766e58bc77d9c2f7d18b8d475f9df8ae0609303048a4dfc5a42e",
+    "tests/unit/test_pending_proxy_setup.bats": "b2d7850f771ba4a88e09332e36b4a62e395efe527a0d8f3d72457cd25c9b8bad",
+    "tests/unit/test_proxy_fail2ban.bats": "b78f8c85471bd391adb068de3daa580cc89b44108c1b39801ec783d2bd30c447",
+    "tests/unit/test_user_removal_safety.bats": "517eebe81a3843a67ae008650b29693c9f647ce6f326f22b6b5bd6dc2fe293c0"
+  },
+  "checks": [
+    {
+      "name": "unit-suite",
+      "command": "bats tests/unit/",
+      "exit_status": 0,
+      "scope": {
+        "total": 160,
+        "passed": 158,
+        "skipped": 2,
+        "skip_reason": "Existing root-only OS detection tests",
+        "reuse": "Only the isolated security-lab fixture changed afterward; BATS and production inputs remain identical."
+      },
+      "verified_revision": "2c09d54"
+    },
+    {
+      "name": "deferred-proxy-live",
+      "command": "FT_TEST_IMAGE=familytraffic:proxy-auth-username python3 tests/integration/test_deferred_proxy.py",
+      "exit_status": 0,
+      "scope": {
+        "passed": 1,
+        "boundary": "Real Xray HTTP/SOCKS: setup lock, VPN-only state, first proxy user, removal to zero users, old/anonymous denial, and later user reactivation"
+      }
+    },
+    {
+      "name": "firewall-namespaces",
+      "command": "FT_UFW_TEST_IMAGE=familytraffic-security-node:local python3 tests/integration/test_installer_firewall.py",
+      "exit_status": 0,
+      "scope": {
+        "passed": 4,
+        "boundary": "Real UFW in disposable network namespaces"
+      }
+    },
+    {
+      "name": "proxy-network-security",
+      "command": "tests/security_lab/run.sh --image familytraffic:proxy-auth-username",
+      "exit_status": 0,
+      "scope": {
+        "passed": 13,
+        "synthetic_migration_checks": 19,
+        "scope": "Final stable lab; queued-event and persisted-ban reset regressions included."
+      },
+      "verified_revision": "cb4a781d3eb19a0bfaabd307dbfb444afe0d046b"
+    },
+    {
+      "name": "deployment-and-rollback",
+      "command": "python3 tests/security_lab/transaction_lab.py --image familytraffic:proxy-auth-username --dind-image fb-publication-dind-base:29",
+      "exit_status": 0,
+      "scope": {
+        "passed": 3,
+        "scope": "Actual image/config switch, injected rollback, immutable-image refusal"
+      }
+    },
+    {
+      "name": "shell-syntax",
+      "command": "bash -n install.sh lib/installer_security.sh lib/fail2ban_setup.sh lib/interactive_params.sh lib/orchestrator.sh lib/proxy_security.sh lib/user_management.sh scripts/familytraffic-security",
+      "exit_status": 0,
+      "scope": {}
+    },
+    {
+      "name": "shellcheck-errors",
+      "command": "shellcheck -S error lib/installer_security.sh lib/proxy_security.sh lib/fail2ban_setup.sh lib/user_management.sh lib/orchestrator.sh lib/interactive_params.sh scripts/familytraffic-security install.sh",
+      "exit_status": 0,
+      "scope": {}
+    },
+    {
+      "name": "host-recovery",
+      "command": "ssh ikenibornft2: familytraffic-security check; fail2ban-client -t; new SSH connection; identity checksum validation",
+      "exit_status": 0,
+      "scope": {
+        "healthy": true,
+        "saved_identities": "unchanged",
+        "ssh_rules": "preserved",
+        "backup": "retained",
+        "cli": "installed"
+      }
+    },
+    {
+      "name": "repository-lint-gate",
+      "command": "./tests/lint.sh",
+      "exit_status": 0,
+      "scope": {
+        "shellcheck_version": "0.9.0",
+        "files": 43,
+        "findings": 189,
+        "errors": 0,
+        "baseline": 189
+      }
+    },
+    {
+      "name": "live-anonymous-proxy-rejection",
+      "command": "curl through both supplied endpoint types without credentials at the verified server IP",
+      "exit_status": 0,
+      "scope": {
+        "http_connect": "407",
+        "https_connect": "407",
+        "credentials_logged": false
+      }
+    }
+  ],
+  "review": {
+    "independent_review": "no remaining important findings",
+    "reviewer_focused_tests": 31,
+    "amendment_review": "No remaining important findings after staging final-account removal; 15 safety tests passed.",
+    "lab_reset_diagnosis": "Independent installed-source diagnosis confirmed observer/restoration queues; deterministic reset clears only disposable daemon state."
+  },
+  "graph": {
+    "state": "ready",
+    "implementation_bindings": "resolved",
+    "test_bindings": "advisory: tests excluded from graph"
+  },
+  "deployment": {
+    "host_alias": "ikenibornft2",
+    "image_id": "sha256:5a75deff22319a4621865828b8ba08164112b00e16203cfb2eb231e697d92811",
+    "hostname_resolution": "Fixed /etc/hosts loopback mapping; getent and sudo through a new SSH connection passed without warning.",
+    "identity_checks": "Original users and keys matched through initial recovery. Later observed external growth from one to two proxy users. Deployment only changed code and preserved that current state; Reality keys remain unchanged."
+  },
+  "lint_baseline_revision": "bc13dc9",
+  "verification_reuse": "Unit evidence remains valid for unchanged BATS/production inputs. Final 13-scenario lab evidence covers the fixture-only change. Lint baseline 189 remains matched.",
+  "lint_baseline_sha256": "f06f93d621eb3e0ee0831f6bec1903d2a0368696212bf1d7efe07b19d78c6bd5",
+  "proxy_file_checks": {
+    "default_dns": [
+      {
+        "source_file": "tmp/http.txt",
+        "endpoint": "http://ft2.ikeniborn.ru:8119",
+        "checks": [
+          {
+            "target": "https://example.com/",
+            "exit_status": 28,
+            "http_code": "000",
+            "connect_code": "000",
+            "target_tls": "0",
+            "proxy_tls": "0",
+            "remote_ip": ""
+          },
+          {
+            "target": "https://api.ipify.org",
+            "exit_status": 28,
+            "http_code": "000",
+            "connect_code": "000",
+            "target_tls": "0",
+            "proxy_tls": "0",
+            "remote_ip": ""
+          }
+        ]
+      },
+      {
+        "source_file": "tmp/https.txt",
+        "endpoint": "https://ft2.ikeniborn.ru:8118",
+        "checks": [
+          {
+            "target": "https://example.com/",
+            "exit_status": 28,
+            "http_code": "000",
+            "connect_code": "000",
+            "target_tls": "0",
+            "proxy_tls": "0",
+            "remote_ip": ""
+          },
+          {
+            "target": "https://api.ipify.org",
+            "exit_status": 28,
+            "http_code": "000",
+            "connect_code": "000",
+            "target_tls": "0",
+            "proxy_tls": "0",
+            "remote_ip": ""
+          }
+        ]
+      }
+    ],
+    "verified_server_ip": [
+      {
+        "source_file": "tmp/http.txt",
+        "endpoint": "http://ft2.ikeniborn.ru:8119",
+        "dns_override": "82.21.92.62",
+        "checks": [
+          {
+            "target": "https://example.com/",
+            "exit_status": 0,
+            "http_code": "200",
+            "connect_code": "200",
+            "target_tls": "0",
+            "proxy_tls": "0",
+            "remote_ip": "82.21.92.62",
+            "expected_page": true
+          },
+          {
+            "target": "https://api.ipify.org",
+            "exit_status": 0,
+            "http_code": "200",
+            "connect_code": "200",
+            "target_tls": "0",
+            "proxy_tls": "0",
+            "remote_ip": "82.21.92.62",
+            "egress_ip": "82.21.92.62"
+          }
+        ]
+      },
+      {
+        "source_file": "tmp/https.txt",
+        "endpoint": "https://ft2.ikeniborn.ru:8118",
+        "dns_override": "82.21.92.62",
+        "checks": [
+          {
+            "target": "https://example.com/",
+            "exit_status": 0,
+            "http_code": "200",
+            "connect_code": "200",
+            "target_tls": "0",
+            "proxy_tls": "0",
+            "remote_ip": "82.21.92.62",
+            "expected_page": true
+          },
+          {
+            "target": "https://api.ipify.org",
+            "exit_status": 0,
+            "http_code": "200",
+            "connect_code": "200",
+            "target_tls": "0",
+            "proxy_tls": "0",
+            "remote_ip": "82.21.92.62",
+            "egress_ip": "82.21.92.62"
+          }
+        ]
+      }
+    ],
+    "finding": "VPN DNS on tunsnx resolves ft2.ikeniborn.ru to 82.38.64.171 even after flushing local cache. Public 1.1.1.1 and 8.8.8.8 and the server resolve it to 82.21.92.62. Both provided proxy credentials passed HTTP 200 and TLS verification when connected to 82.21.92.62."
+  },
+  "delivery": {
+    "prs": [
+      {
+        "mergeCommit": {
+          "oid": "b53d78d2b680e9c8bea3433ef38b9b8cf506a13f"
+        },
+        "state": "MERGED",
+        "url": "https://github.com/ikeniborn/familyTraffic/pull/48"
+      },
+      {
+        "mergeCommit": {
+          "oid": "810f0a926101f15e6f839d6192667cd089974a11"
+        },
+        "state": "MERGED",
+        "url": "https://github.com/ikeniborn/familyTraffic/pull/49"
+      }
+    ],
+    "verification_reuse": "Promotion merge runtime/test inputs matched the fully green PR48 tree; only project wiki binding differed.",
+    "fully_green_checks_pr": 48
+  },
+  "result": "OK"
+}

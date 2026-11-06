@@ -1,10 +1,11 @@
 ---
 result_check:
-  verdict: needs_work
+  verdict: OK
   source: intent
   intent_hash: 36706f0ef0e6019e
   last_run: 2026-11-06
-  reason: User approved all-user removal amendment; implementation verification and PR delivery remain pending.
+  reviewed: true
+  docs_checked: true
 workflow:
   route: chain
   continuation: execute
