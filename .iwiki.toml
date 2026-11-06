@@ -1,6 +1,6 @@
-read = ["familyTraffic","familybudget", "minipc"]
-write = ["familyTraffic","familybudget", "minipc"]
-primary = "familyTraffic"
+read = ["familytraffic","familybudget", "minipc"]
+write = ["familytraffic","familybudget", "minipc"]
+primary = "familytraffic"
 
 # GWT specification policy for every visible local domain.
 # Choose one value:
