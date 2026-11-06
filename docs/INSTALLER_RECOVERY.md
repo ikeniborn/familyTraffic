@@ -44,7 +44,11 @@ the blocking rule. Proxy service then accepts that user's credentials without
 reinstallation. Anonymous requests remain rejected.
 
 `FT_INITIAL_PROXY_USERNAME` remains supported for explicit unattended provisioning.
-Deleting the last active proxy account retains the existing refusal behavior.
+Removing the last proxy-enabled user is permitted. The removal transaction restores
+the closed setup state before committing the empty users database. Anonymous and
+previous credentials cannot reach proxy destinations. A later proxy-enabled user
+reactivates access. Failed application or persistence restores the previous user
+and configuration. Concurrent removals are serialized and can remove every user.
 
 ## Journal-only hosts
 

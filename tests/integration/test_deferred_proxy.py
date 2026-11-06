@@ -63,7 +63,9 @@ class DeferredProxyTest(unittest.TestCase):
             (directory / "auth.log").touch(mode=0o600)
 
             def shell(command):
-                env = dict(os.environ, XRAY_CONFIG=str(config), USERS_JSON=str(users))
+                env = dict(os.environ, XRAY_CONFIG=str(config), USERS_JSON=str(users),
+                           VLESS_HOME=str(directory), CLIENTS_DIR=str(directory / "clients"),
+                           LOCK_FILE=str(directory / "users.lock"), XRAY_CONTAINER=name)
                 subprocess.run(["bash", "-euc", command, "_", str(ROOT)], env=env,
                                check=True, stdout=subprocess.DEVNULL)
 
@@ -111,7 +113,7 @@ class DeferredProxyTest(unittest.TestCase):
                 for protocol in ports:
                     self.assertNotEqual(request(protocol, lock).returncode, 0)
                 self.assertEqual(hits, [])
-                users.write_text('{"users":[{"username":"alice","proxy_password":"fixture-password"}]}')
+                users.write_text('{"users":[{"username":"alice","connection_type":"proxy","proxy_password":"fixture-password"}]}')
                 shell('source "$1/lib/user_management.sh"; update_proxy_accounts alice fixture-password; '
                       'validate_saved_proxy_accounts "$XRAY_CONFIG" "$USERS_JSON"')
                 subprocess.run(["docker", "restart", name], check=True, stdout=subprocess.DEVNULL)
@@ -123,6 +125,28 @@ class DeferredProxyTest(unittest.TestCase):
                     self.assertEqual(response.returncode, 0, response.stderr.decode())
                     self.assertEqual(response.stdout, b"deferred-proxy-ok")
                 self.assertEqual(len(hits), 2)
+                # Use real removal and persistence, with a real restart for this bare Xray node.
+                shell('source "$1/lib/user_management.sh"; '
+                      'reload_xray() { validate_proxy_auth_config "$XRAY_CONFIG" && docker restart "$XRAY_CONTAINER" >/dev/null; }; '
+                      'remove_user alice; proxy_config_is_pending "$XRAY_CONFIG"; '
+                      'validate_saved_proxy_accounts "$XRAY_CONFIG" "$USERS_JSON"')
+                self.assertEqual(json.loads(users.read_text())["users"], [])
+                wait_ready()
+                new_lock = json.loads(config.read_text())["inbounds"][0]["settings"]["accounts"][0]
+                for protocol in ports:
+                    self.assertNotEqual(request(protocol).returncode, 0)
+                    self.assertNotEqual(request(protocol, {"user": "alice", "pass": "fixture-password"}).returncode, 0)
+                    self.assertNotEqual(request(protocol, new_lock).returncode, 0)
+                self.assertEqual(len(hits), 2)
+                users.write_text('{"users":[{"username":"bob","connection_type":"proxy","proxy_password":"next-password"}]}')
+                shell('source "$1/lib/user_management.sh"; update_proxy_accounts bob next-password')
+                subprocess.run(["docker", "restart", name], check=True, stdout=subprocess.DEVNULL)
+                wait_ready()
+                for protocol in ports:
+                    response = request(protocol, {"user": "bob", "pass": "next-password"})
+                    self.assertEqual(response.returncode, 0, response.stderr.decode())
+                    self.assertEqual(response.stdout, b"deferred-proxy-ok")
+                self.assertEqual(len(hits), 4)
             finally:
                 subprocess.run(["docker", "rm", "-f", name], stdout=subprocess.DEVNULL,
                                stderr=subprocess.DEVNULL)

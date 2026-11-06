@@ -1,9 +1,15 @@
 ---
+result_check:
+  verdict: needs_work
+  source: intent
+  intent_hash: 36706f0ef0e6019e
+  last_run: 2026-11-06
+  reason: User approved all-user removal amendment; implementation verification and PR delivery remain pending.
 workflow:
   route: chain
   continuation: execute
 review:
-  intent_hash: 0dc26d2d89046b9c
+  intent_hash: 36706f0ef0e6019e
   last_run: 2026-11-06
   phases:
     structure: { status: passed }
@@ -20,7 +26,7 @@ review:
 
 ## Objective
 
-Recover the failed master installer deployment on ikenibornvpn. Remove the requirement to configure UFW manually before installation. Configure the proxy mode selected during installation without requiring an initial proxy user. Add users later with an explicit choice of proxy access.
+Recover the failed master installer deployment on ikenibornvpn. Remove the requirement to configure UFW manually before installation. Configure the proxy mode selected during installation without requiring an initial proxy user. Add users later with an explicit choice of proxy access. Permit explicit removal of every user, including the last proxy user, while keeping empty proxies locked.
 
 ## Desired Outcomes
 
@@ -29,6 +35,7 @@ Recover the failed master installer deployment on ikenibornvpn. Remove the requi
 - On a journal-only host, the enabled sshd Fail2ban jail reads systemd journal. Fail2ban configuration validation and proxy monitoring succeed.
 - When proxy mode is selected, installation prepares and preserves that proxy configuration without requiring an initial user. Until an authorized proxy user exists, proxy requests cannot reach destinations.
 - Later user creation offers proxy access or no proxy access. A proxy-enabled user receives working authenticated proxy access without reinstalling the server. A user without proxy access receives no proxy credentials.
+- Explicit removal of the last proxy user succeeds, leaves no saved proxy users, and restores the closed proxy setup state. Concurrent removals can delete every user without exposing anonymous proxy access. A failed activation or database write preserves the removed user and restores configuration.
 - The existing saved account, keys, and configuration on ikenibornvpn survive recovery. The container runs from a reviewed prebuilt image and passes service and security checks.
 - Changes reach test through a PR from dev-installer-deployment-recovery, then reach master through a second PR.
 
@@ -54,7 +61,7 @@ Recover the failed master installer deployment on ikenibornvpn. Remove the requi
 ### Hard
 
 - Preserve existing UFW rules and current SSH access.
-- Preserve saved users, credentials, Reality keys, and unrelated repository changes.
+- Preserve saved users, credentials, and Reality keys during installation and host recovery. Delete users only through an explicit removal command. Preserve unrelated repository changes.
 - Never start public HTTP or SOCKS proxies without authentication.
 - Use a prebuilt image on the server. Do not build application images there.
 - Keep recovery backups until live verification succeeds.
@@ -69,7 +76,7 @@ Recover the failed master installer deployment on ikenibornvpn. Remove the requi
 
 ## Stop Rules
 
-- Halt if: a change would remove existing SSH access, alter saved identities, expose anonymous proxies, or discard the recovery backup.
+- Halt if: a change would remove existing SSH access, alter saved identities outside an explicit user-removal command, expose anonymous proxies, or discard the recovery backup.
 - Escalate if: recovery requires changes outside these boundaries or live verification fails after focused diagnosis.
-- Done when: the installer tests cover both SSH source choices, installation without an initial user, and later user creation with and without proxy access; ikenibornvpn accepts a new SSH session, runs the container, and passes security checks; identity hashes remain unchanged; both PR deliveries are recorded.
+- Done when: the installer tests cover both SSH source choices, installation without an initial user, later user creation with and without proxy access, and last/concurrent user removal to a locked empty state; ikenibornvpn accepts a new SSH session, runs the container, and passes security checks; identity hashes remain unchanged; both PR deliveries are recorded.
 - Retain completion-pending while required verification or durable wiki delivery remains incomplete.

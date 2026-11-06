@@ -1198,14 +1198,16 @@ rebuild_proxy_accounts_from_users_json() {
 # Description: Remove user from SOCKS5 and HTTP proxy accounts in Xray config
 # Arguments:
 #   $1 - username
+#   $2 - optional staging configuration path
 # Returns:
 #   0 on success, 1 on failure
 # =============================================================================
 remove_proxy_accounts() {
     local username="$1"
+    local config="${2:-$XRAY_CONFIG}"
 
     # Check if SOCKS5 proxy inbound exists
-    if ! jq -e '.inbounds[] | select(.tag == "socks5-proxy")' "${XRAY_CONFIG}" >/dev/null 2>&1; then
+    if ! jq -e '.inbounds[] | select(.tag == "socks5-proxy")' "$config" >/dev/null 2>&1; then
         log_info "Proxy support not enabled, skipping proxy account removal"
         return 0
     fi
@@ -1222,14 +1224,14 @@ remove_proxy_accounts() {
     if ! jq --arg user "$username" '
         (.inbounds[] | select(.tag == "socks5-proxy") | .settings.accounts) |= (. // [] | map(select(.user != $user))) |
         (.inbounds[] | select(.tag == "http-proxy")   | .settings.accounts) |= (. // [] | map(select(.user != $user)))
-      ' "${XRAY_CONFIG}" > "$temp_file"; then
+      ' "$config" > "$temp_file"; then
         log_error "Failed to update proxy accounts"
         rm -f "$temp_file"
         return 1
     fi
 
     # Write preserving inode (required for Docker bind mounts)
-    if ! write_preserving_inode "$temp_file" "${XRAY_CONFIG}"; then
+    if ! write_preserving_inode "$temp_file" "$config"; then
         log_error "Failed to save updated Xray config"
         rm -f "$temp_file"
         return 1
@@ -1238,7 +1240,7 @@ remove_proxy_accounts() {
     # Verify removal
     if jq -e --arg user "$username" \
        '.inbounds[] | select(.tag == "socks5-proxy") | .settings.accounts[] | select(.user == $user)' \
-       "${XRAY_CONFIG}" >/dev/null 2>&1; then
+       "$config" >/dev/null 2>&1; then
         log_error "Failed to verify proxy account removal for '$username'"
         return 1
     fi
@@ -2802,13 +2804,11 @@ remove_user() (
     fi
 
     if [[ "$connection_type" == proxy || "$connection_type" == both ]]; then
-        # Managed proxy receivers must retain authenticated accounts, as on reload.
-        if ! jq -e --arg user "$username" '
-            all(.inbounds[] | select(.tag == "socks5-proxy" or .tag == "http-proxy");
-                (.settings.accounts | map(select(.user != $user)) | length) > 0)
-        ' "$XRAY_CONFIG" >/dev/null; then
-            log_error 'Cannot remove the last proxy account while public proxies are enabled'
-            return 1
+        if jq -e 'any(.inbounds[]; .tag == "socks5-proxy" or .tag == "http-proxy")' "$XRAY_CONFIG" >/dev/null; then
+            if ! validate_proxy_auth_config "$XRAY_CONFIG" || ! validate_saved_proxy_accounts "$XRAY_CONFIG" "$USERS_JSON"; then
+                log_error 'Proxy accounts disagree with saved users; synchronize before removal'
+                return 1
+            fi
         fi
     fi
 
@@ -2845,7 +2845,15 @@ remove_user() (
         remove_client_from_xray "$uuid" "$username" || return 1
     fi
     if [[ "$connection_type" == proxy || "$connection_type" == both ]]; then
-        remove_proxy_accounts "$username" || return 1
+        cp -p "$XRAY_CONFIG" "$work/xray.next" || return 1
+        remove_proxy_accounts "$username" "$work/xray.next" || return 1
+        # Apply the same closed state as a fresh installation before committing deletion.
+        if jq -e '[.inbounds[] | select(.tag == "socks5-proxy" or .tag == "http-proxy")] |
+            length == 2 and all(.[]; .settings.accounts | length == 0)' "$work/xray.next" >/dev/null; then
+            initialize_pending_proxy_config "$work/xray.next" || return 1
+        fi
+        validate_proxy_auth_config "$work/xray.next" || return 1
+        write_preserving_inode "$work/xray.next" "$XRAY_CONFIG" || return 1
     fi
     if ! reload_xray; then
         log_error 'User removal failed: Xray activation failed; preserving user database'
