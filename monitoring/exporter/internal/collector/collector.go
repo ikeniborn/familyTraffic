@@ -119,6 +119,9 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 	}
 	if c.State != nil {
 		for _, v := range c.State.Snapshot() {
+			if v.Labels["inbound"] == "traffic-api" {
+				continue
+			}
 			source := sourceOf(v.Metric)
 			if source != "" && !c.health[source].Up {
 				continue
@@ -160,6 +163,9 @@ func (c *Collector) InitializationKeys() []string {
 	}
 	keys := []string{}
 	for _, v := range c.State.Snapshot() {
+		if v.Labels["inbound"] == "traffic-api" {
+			continue
+		}
 		if v.Fresh {
 			source := sourceOf(v.Metric)
 			if source == "" || c.health[source].Up {
