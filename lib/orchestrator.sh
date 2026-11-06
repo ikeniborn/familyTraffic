@@ -750,6 +750,10 @@ EOF
         return 1
     fi
 
+    # Apply native monitoring only when explicitly enabled.
+    source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/traffic_monitoring.sh"
+    stage_traffic_monitoring_config "$staged_config" "$staged_config" || { rm -f "$staged_config"; return 1; }
+
     # Validate JSON syntax
     if ! jq empty "$staged_config" 2>/dev/null; then
         rm -f "$staged_config"

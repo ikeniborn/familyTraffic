@@ -1,0 +1,14 @@
+{
+  "listen": "0.0.0.0:9915",
+  "api": "127.0.0.1:10085",
+  "identity": "/opt/familytraffic/config/traffic-identities.json",
+  "state_dir": "/var/lib/familytraffic-exporter",
+  "fail2ban": "/var/lib/familytraffic-fail2ban/status.json",
+  "detail_budget": 10000,
+  "logs": {
+    "access": "/opt/familytraffic/logs/xray/access.log",
+    "error": "/opt/familytraffic/logs/xray/error.log",
+    "nginx": "/opt/familytraffic/logs/nginx/traffic.log",
+    "fail2ban": "/var/log/fail2ban.log"
+  }
+}

@@ -886,6 +886,10 @@ reload_xray() {
         log_error 'Proxy authentication preflight failed; Xray activation refused'
         return 1
     }
+    if jq -e '.api.tag == "traffic-api"' "$XRAY_CONFIG" >/dev/null 2>&1; then
+        source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/traffic_monitoring.sh"
+        refresh_traffic_identity_map "$XRAY_CONFIG" "${VLESS_DIR:-/opt/familytraffic}/config/traffic-identities.json" || return 1
+    fi
     log_info "Reloading Xray configuration..."
 
     if ! docker ps --format '{{.Names}}' | grep -q "^${XRAY_CONTAINER}$"; then

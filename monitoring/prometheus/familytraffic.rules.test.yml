@@ -1,0 +1,147 @@
+rule_files:
+- familytraffic.rules.yml
+evaluation_interval: 1m
+tests:
+- interval: 1m
+  input_series:
+  - series: up{job="familytraffic",instance="ikenibornsw"}
+    values: 1 0 0 0 0
+  - series: familytraffic_source_up{job="familytraffic",instance="ikenibornsw",source="xray"}
+    values: 1 0 0 0 0
+  alert_rule_test:
+  - eval_time: 3m
+    alertname: FamilyTrafficExporterUnavailable
+    exp_alerts:
+    - exp_labels:
+        job: familytraffic
+        instance: ikenibornsw
+        severity: warning
+      exp_annotations:
+        summary: familyTraffic exporter unavailable
+  - eval_time: 3m
+    alertname: FamilyTrafficSourceUnavailable
+    exp_alerts:
+    - exp_labels:
+        job: familytraffic
+        instance: ikenibornsw
+        source: xray
+        severity: warning
+      exp_annotations:
+        summary: familyTraffic collection source unavailable
+- interval: 1m
+  input_series:
+  - series: up{job="familytraffic",instance="ikenibornsw"}
+    values: 1x10
+  - series: familytraffic_checkpoint_age_seconds{job="familytraffic",instance="ikenibornsw"}
+    values: 900x10
+  - series: familytraffic_access_total{job="familytraffic",instance="ikenibornsw",inbound="http-proxy",status="accepted"}
+    values: 1x10
+  alert_rule_test:
+  - eval_time: 10m
+    alertname: FamilyTrafficCheckpointStalled
+    exp_alerts: []
+- interval: 1m
+  input_series:
+  - series: up{job="familytraffic",instance="ikenibornsw"}
+    values: 1x5
+  alert_rule_test:
+  - eval_time: 3m
+    alertname: FamilyTrafficSourceUnavailable
+    exp_alerts:
+    - exp_labels:
+        job: familytraffic
+        instance: ikenibornsw
+        severity: warning
+      exp_annotations:
+        summary: familyTraffic collection source unavailable
+- interval: 1m
+  input_series:
+  - series: familytraffic_detail_series{job="familytraffic",instance="ikenibornsw",family="access"}
+    values: 9000x6
+  alert_rule_test:
+  - eval_time: 5m
+    alertname: FamilyTrafficDetailBudget
+    exp_alerts:
+    - exp_labels:
+        job: familytraffic
+        instance: ikenibornsw
+        family: access
+        severity: warning
+      exp_annotations:
+        summary: familyTraffic address series budget above 80 percent
+- interval: 1m
+  input_series:
+  - series: familytraffic_collection_gaps_total{job="familytraffic",instance="ikenibornsw",source="access",reason="rotation"}
+    values: 0 0 1 1 1
+  alert_rule_test:
+  - eval_time: 3m
+    alertname: FamilyTrafficAccountingGap
+    exp_alerts:
+    - exp_labels:
+        job: familytraffic
+        instance: ikenibornsw
+        source: access
+        reason: rotation
+        severity: critical
+      exp_annotations:
+        summary: familyTraffic journal data incomplete
+- interval: 1m
+  input_series:
+  - series: familytraffic_auth_collection_gaps_total{job="familytraffic",instance="ikenibornsw"}
+    values: 0 0 1 1 1
+  alert_rule_test:
+  - eval_time: 3m
+    alertname: FamilyTrafficAccountingGap
+    exp_alerts:
+    - exp_labels:
+        job: familytraffic
+        instance: ikenibornsw
+        severity: critical
+      exp_annotations:
+        summary: familyTraffic journal data incomplete
+- interval: 1m
+  input_series:
+  - series: familytraffic_detail_overflow_total{job="familytraffic",instance="ikenibornsw",family="access"}
+    values: 0 0 1 1 1
+  alert_rule_test:
+  - eval_time: 3m
+    alertname: FamilyTrafficDetailOverflow
+    exp_alerts:
+    - exp_labels:
+        job: familytraffic
+        instance: ikenibornsw
+        family: access
+        severity: warning
+      exp_annotations:
+        summary: familyTraffic detail omitted by series budget
+- interval: 1m
+  input_series:
+  - series: familytraffic_checkpoint_age_seconds{job="familytraffic",instance="ikenibornsw"}
+    values: 900x6
+  - series: familytraffic_access_total{job="familytraffic",instance="ikenibornsw",inbound="http-proxy",status="accepted"}
+    values: 0+60x6
+  alert_rule_test:
+  - eval_time: 3m
+    alertname: FamilyTrafficCheckpointStalled
+    exp_alerts:
+    - exp_labels:
+        job: familytraffic
+        instance: ikenibornsw
+        severity: warning
+      exp_annotations:
+        summary: familyTraffic checkpoint stale while access counters advance
+- interval: 1m
+  input_series:
+  - series: familytraffic_last_success_timestamp_seconds{job="familytraffic",instance="ikenibornsw",source="xray"}
+    values: '0x8'
+  alert_rule_test:
+  - eval_time: 5m
+    alertname: FamilyTrafficSourceStale
+    exp_alerts:
+    - exp_labels:
+        job: familytraffic
+        instance: ikenibornsw
+        source: xray
+        severity: warning
+      exp_annotations:
+        summary: familyTraffic source measurements stale

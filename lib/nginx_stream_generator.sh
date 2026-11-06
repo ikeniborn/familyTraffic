@@ -49,6 +49,7 @@
 # Returns: nginx.conf content on stdout; 0 on success, 1 on failure
 # ============================================================================
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/proxy_security.sh"
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/traffic_monitoring.sh"
 NGINX_CONF="${NGINX_CONF:-/opt/familytraffic/config/nginx/nginx.conf}"
 
 
@@ -66,6 +67,9 @@ generate_nginx_config() {
         echo "ERROR: generate_nginx_config requires cert_domain as \$1" >&2
         return 1
     fi
+
+    local _traffic_monitoring
+    _traffic_monitoring=$(resolve_traffic_monitoring) || return 1
 
     local cert_path="/etc/letsencrypt/live/${cert_domain}"
 
@@ -93,6 +97,12 @@ events {
 stream {
     error_log /var/log/nginx/stream_error.log warn;
 
+$(if [[ "${_traffic_monitoring}" == "true" ]]; then
+    cat <<'TRAFFIC_LOG'
+    log_format traffic escape=json '{"time":"$time_iso8601","listener":"$server_port","client_ip":"$remote_addr","status":"$status","duration":$session_time,"received":$bytes_received,"sent":$bytes_sent}';
+    access_log /var/log/nginx/traffic.log traffic;
+TRAFFIC_LOG
+fi)
     # SNI map: Tier 2 subdomains → loopback http block; Reality → Xray passthrough
     map \$ssl_preread_server_name \$backend_addr {
 $(if [[ -n "$ws_subdomain" ]]; then

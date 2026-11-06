@@ -1,0 +1,5 @@
+[Unit]
+Description=Rotate bounded familyTraffic traffic logs
+[Service]
+Type=oneshot
+ExecStart=/usr/sbin/logrotate --state /var/lib/familytraffic-fail2ban/logrotate.state /etc/familytraffic-exporter/logrotate.conf
