@@ -177,6 +177,7 @@ source_libraries() {
         "dependencies.sh"
         "old_install_detect.sh"
         "interactive_params.sh"
+        "installer_security.sh"
         "sudoers_info.sh"
         "orchestrator.sh"
         "verification.sh"
@@ -352,9 +353,9 @@ main() {
     collect_parameters
     print_success "Parameters collected"
 
-    # Public proxy reconciliation requires active host firewall protection.
-    if [[ "$ENABLE_PUBLIC_PROXY" == "true" ]] && ! LC_ALL=C ufw status | grep -q '^Status: active$'; then
-        print_error 'UFW must be active before installing public proxies. Allow SSH access and enable UFW, then retry.'
+    # Establish management access before enabling host protection.
+    if ! configure_install_firewall "${SSH_ALLOW_FROM:-}"; then
+        print_error 'Failed to configure UFW while preserving SSH access.'
         exit 1
     fi
 
@@ -527,7 +528,8 @@ LOGROTATE_EOF
     print_message "${COLOR_CYAN}" "Next Steps:"
     print_message "${COLOR_YELLOW}" "  1. Configure sudoers (see instructions above)"
     if [[ "${ENABLE_PUBLIC_PROXY:-false}" == true ]]; then
-        print_message "${COLOR_YELLOW}" "  2. Initial proxy user is provisioned. Retrieve its settings: familytraffic show-user <username>"
+        print_message "${COLOR_YELLOW}" "  2. Add a user: familytraffic add-user <username> (choose proxy or both for proxy access)"
+        print_message "${COLOR_YELLOW}" "     Proxy settings are ready; access stays locked until a proxy user exists."
         print_message "${COLOR_YELLOW}" "     Verify active protection: familytraffic-security check"
     else
         print_message "${COLOR_YELLOW}" "  2. Add your first user: familytraffic add-user <username>"

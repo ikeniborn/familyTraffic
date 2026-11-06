@@ -71,6 +71,8 @@ sudo ./install.sh
 
 **Детальная инструкция:** [docs/GUIDES.md](docs/GUIDES.md)
 
+SSH/UFW setup and proxy users after installation: [installer guide](docs/INSTALLER_RECOVERY.md).
+
 ---
 
 ## Команды

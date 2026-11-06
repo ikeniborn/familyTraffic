@@ -45,6 +45,56 @@ validate_proxy_auth_config() {
         echo 'Proxy authentication preflight failed: require nonempty accounts and SOCKS password authentication' >&2
         return 1
     fi
+    if jq -e 'any(.inbounds[] | .settings.accounts[]?; .user == "@ft-unprovisioned")' "$1" >/dev/null; then
+        proxy_config_is_pending "$1" || { echo 'Invalid unprovisioned proxy lock' >&2; return 1; }
+    fi
+}
+
+# Prepare selected proxy listeners without creating a user or permitting traffic.
+# The private lock credential keeps HTTP authentication enabled with no saved users.
+initialize_pending_proxy_config() {
+    python3 - "$1" <<'PY'
+import json,pathlib,secrets,sys
+path=pathlib.Path(sys.argv[1]);config=json.loads(path.read_text())
+proxies=[i for i in config['inbounds'] if i['tag'] in ('http-proxy','socks5-proxy')]
+if sorted(i['tag'] for i in proxies)!=['http-proxy','socks5-proxy'] or any(i['settings'].get('accounts') for i in proxies):
+    raise SystemExit('Only empty initial proxy receivers can be locked')
+if not any(o.get('tag')=='blocked' and o.get('protocol')=='blackhole' for o in config['outbounds']):
+    raise SystemExit('Missing blackhole outbound for unprovisioned proxies')
+account={'user':'@ft-unprovisioned','pass':secrets.token_hex(32)}
+for inbound in proxies:
+    inbound['settings']['accounts']=[account]
+rule={'type':'field','inboundTag':['http-proxy','socks5-proxy'],'outboundTag':'blocked'}
+config.setdefault('routing',{}).setdefault('rules',[]).insert(0,rule)
+with path.open('w') as out:
+    json.dump(config,out,indent=2);out.write('\n')
+PY
+}
+
+proxy_config_is_pending() {
+    jq -e '
+        [.inbounds[] | select(.tag == "http-proxy" or .tag == "socks5-proxy")] as $proxies |
+        ($proxies | map(.tag) | sort == ["http-proxy","socks5-proxy"]) and
+        ($proxies[0].settings.accounts == $proxies[1].settings.accounts) and
+        all($proxies[]; .settings.accounts | length == 1 and
+            .[0].user == "@ft-unprovisioned" and (.[0].pass | test("^[a-f0-9]{64}$"))) and
+        .routing.rules[0] == {type:"field",inboundTag:["http-proxy","socks5-proxy"],outboundTag:"blocked"} and
+        any(.outbounds[]; .tag == "blocked" and .protocol == "blackhole")
+    ' "$1" >/dev/null 2>&1
+}
+
+validate_saved_proxy_accounts() {
+    if proxy_config_is_pending "$1"; then
+        jq -e '[.users[] | select(.proxy_password != null and .proxy_password != "")] | length == 0' "$2" >/dev/null
+        return $?
+    fi
+    jq -e --slurpfile users "$2" '
+        ($users[0].users | map(select(.proxy_password != null and .proxy_password != "") |
+            {user: .username, pass: .proxy_password}) | sort_by(.user)) as $accounts |
+        ($accounts | length > 0) and
+        all(.inbounds[] | select(.tag == "http-proxy" or .tag == "socks5-proxy");
+            (.settings.accounts | sort_by(.user)) == $accounts)
+    ' "$1" >/dev/null
 }
 
 # Stage the private PROXY receivers without rebuilding users, transports, or routes.

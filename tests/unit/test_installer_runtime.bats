@@ -79,7 +79,7 @@ setup() {
     [ "$status" -eq 0 ]
 }
 
-@test "public proxy installation stops before certificate acquisition when UFW is inactive" {
+@test "firewall setup failure stops before certificate acquisition" {
     run bash -c '
         source <(sed '\''$d'\'' "$1")
         print_banner() { :; }
@@ -93,12 +93,13 @@ setup() {
         detect_old_installation() { OLD_INSTALL_FOUND=false; }
         collect_parameters() { ENABLE_PUBLIC_PROXY=true; ENABLE_PROXY_TLS=true; }
         ufw() { printf "Status: inactive\n"; }
+        configure_install_firewall() { return 1; }
         get_server_public_ip() { echo certificate-stage-reached; return 99; }
         main
     ' _ "$PROJECT_ROOT/install.sh"
     echo "$output"
     [ "$status" -eq 1 ]
-    [[ "$output" == *"UFW must be active before installing public proxies"* ]]
+    [[ "$output" == *"Failed to configure UFW while preserving SSH access"* ]]
     [[ "$output" != *"certificate-stage-reached"* ]]
 }
 

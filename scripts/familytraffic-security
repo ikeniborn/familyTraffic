@@ -135,13 +135,7 @@ security_preflight() {
     validate_proxy_auth_config "$SECURITY_XRAY" || return 1
     SECURITY_USER_HASH=$(security_user_fingerprint) || return 1
     # Accounts must already be synchronized. Never reconstruct the user database.
-    jq -e --slurpfile users "$SECURITY_USERS" '
-        ($users[0].users | map(select(.proxy_password != null and .proxy_password != "") |
-            {user: .username, pass: .proxy_password}) | sort_by(.user)) as $accounts |
-        ($accounts | length > 0) and
-        all(.inbounds[] | select(.tag == "http-proxy" or .tag == "socks5-proxy");
-            (.settings.accounts | sort_by(.user)) == $accounts)
-    ' "$SECURITY_XRAY" >/dev/null || { echo 'Saved users and proxy accounts disagree; synchronize accounts before reconciliation' >&2; return 1; }
+    validate_saved_proxy_accounts "$SECURITY_XRAY" "$SECURITY_USERS" || { echo 'Saved users and proxy accounts disagree; synchronize accounts before reconciliation' >&2; return 1; }
     validate_proxy_firewall "$SECURITY_NOTLS" || return 1
     SECURITY_FIREWALL_CHANGES=$(_proxy_firewall_changes "$SECURITY_NOTLS") || return 1
     SECURITY_WORK=$(mktemp -d) || return 1
@@ -249,7 +243,15 @@ with open(sys.argv[2],'w') as out:
     out.write('resolve = '+quote(sys.argv[3]+':8118:127.0.0.1')+'\n')
 os.chmod(sys.argv[2],0o600)
 PY
-    [[ "$(curl --config "$SECURITY_WORK/probe.curl" --noproxy '' --silent --fail --retry 10 --retry-connrefused --retry-delay 1 --retry-max-time 20 --max-time 20 --output /dev/null --write-out '%{http_code}' "${FT_SECURITY_TEST_URL:-https://example.com/}")" == 200 ]] || return 1
+    if proxy_config_is_pending "$SECURITY_XRAY"; then
+        # Even the private setup credential must not reach a destination.
+        if curl --config "$SECURITY_WORK/probe.curl" --noproxy '' --proxytunnel --silent --fail --max-time 10 --output /dev/null "${FT_SECURITY_TEST_URL:-https://example.com/}"; then
+            echo 'Unprovisioned proxy unexpectedly reached a destination' >&2
+            return 1
+        fi
+    else
+        [[ "$(curl --config "$SECURITY_WORK/probe.curl" --noproxy '' --silent --fail --retry 10 --retry-connrefused --retry-delay 1 --retry-max-time 20 --max-time 20 --output /dev/null --write-out '%{http_code}' "${FT_SECURITY_TEST_URL:-https://example.com/}")" == 200 ]] || return 1
+    fi
     security_verify_auth_event
 }
 

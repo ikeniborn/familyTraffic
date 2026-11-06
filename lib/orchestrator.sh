@@ -172,7 +172,9 @@ orchestrate_installation() {
 
     # Create users before proxy configuration so listeners never start anonymously.
     create_users_json || return 1
-    if [[ "${ENABLE_PUBLIC_PROXY:-false}" == true ]]; then
+    # Proxy users are added later through the normal per-user access choice.
+    # Preserve unattended provisioning when the operator explicitly supplies a user.
+    if [[ "${ENABLE_PUBLIC_PROXY:-false}" == true && -n "${FT_INITIAL_PROXY_USERNAME:-}" ]]; then
         provision_initial_proxy_user || return 1
     fi
 
@@ -806,11 +808,15 @@ EOF
                 {user: .username, pass: .proxy_password})) as $accounts |
             (.inbounds[] | select(.tag == "http-proxy" or .tag == "socks5-proxy") |
                 .settings.accounts) = $accounts
-        ' "$staged_config" > "$synced_config" || ! validate_proxy_auth_config "$synced_config"; then
+        ' "$staged_config" > "$synced_config"; then
             rm -f "$staged_config" "$synced_config"
             echo 'Proxy account synchronization failed; public activation refused' >&2
             return 1
         fi
+        if ! jq -e '[.users[] | select(.proxy_password != null and .proxy_password != "")] | length > 0' "$USERS_JSON" >/dev/null; then
+            initialize_pending_proxy_config "$synced_config" || { rm -f "$staged_config" "$synced_config"; return 1; }
+        fi
+        validate_proxy_auth_config "$synced_config" || { rm -f "$staged_config" "$synced_config"; return 1; }
         cat "$synced_config" > "$staged_config" || return 1
         rm -f "$synced_config"
     fi
@@ -1319,26 +1325,7 @@ EOF
         echo "  ✓ Docker forwarding rules already present"
     fi
 
-    # v4.3: Remove old reverse proxy port rules (8443-8452) if they exist
-    echo "  Removing old reverse proxy port rules (v4.2: 8443-8452)..."
-    local removed_count=0
-    for old_port in {8443..8452}; do
-        if ufw status numbered | grep -q "${old_port}/tcp"; then
-            # Find rule number and delete
-            local rule_nums=$(ufw status numbered | grep "${old_port}/tcp" | grep -oP '^\[\s*\K\d+' || true)
-            if [[ -n "$rule_nums" ]]; then
-                for rule_num in $rule_nums; do
-                    echo "y" | ufw delete "$rule_num" &>/dev/null || true
-                    ((removed_count++))
-                done
-            fi
-        fi
-    done
-    if [[ $removed_count -gt 0 ]]; then
-        echo "  ✓ Removed $removed_count old reverse proxy port rules"
-    else
-        echo "  ✓ No old reverse proxy port rules found"
-    fi
+    # Preserve operator rules, including legacy ports. Report exposure below.
 
     # v5.30: Allow Nginx external port 443 (NOT VLESS_PORT which is internal 8443)
     # Nginx stream listens on 443 externally via ssl_preread SNI routing, forwards Reality to Xray on 8443
@@ -1364,16 +1351,7 @@ EOF
     if [[ ${#exposed_nginx_ports[@]} -gt 0 ]]; then
         echo -e "${YELLOW}  ⚠️  WARNING: Nginx backend ports exposed: ${exposed_nginx_ports[*]}${NC}"
         echo "  These ports should be localhost-only (127.0.0.1) in v4.3"
-        echo "  Removing rules..."
-        for port in "${exposed_nginx_ports[@]}"; do
-            local rule_nums=$(ufw status numbered | grep "${port}/tcp" | grep -oP '^\[\s*\K\d+' || true)
-            if [[ -n "$rule_nums" ]]; then
-                for rule_num in $rule_nums; do
-                    echo "y" | ufw delete "$rule_num" &>/dev/null || true
-                done
-            fi
-        done
-        echo "  ✓ Nginx backend ports secured (localhost-only)"
+        echo "  Existing rules preserved; review these ports separately."
     else
         echo "  ✓ Nginx backend ports are localhost-only (correct)"
     fi
@@ -1443,6 +1421,7 @@ deploy_containers() {
     if [[ "${ENABLE_PUBLIC_PROXY:-false}" == true ]]; then
         source "$SCRIPT_DIR_LIB/fail2ban_setup.sh"
         check_fail2ban_installed || install_fail2ban || return 1
+        configure_sshd_journal_backend || return 1
         source "$SCRIPT_DIR_LIB/../scripts/familytraffic-security"
         local selected_image selected_id
         selected_image=$(docker compose config --format json | jq -er '.services.familytraffic.image') || return 1

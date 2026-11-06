@@ -65,15 +65,23 @@ class Lab:
             if (address in status) == banned:
                 return
             time.sleep(0.25)
+        status = self.fail2ban("status", JAIL).stdout
+        log = self.node("tail -80 /var/log/fail2ban.log", check=False).stdout
+        (ARTIFACTS / "ban-wait-failure.txt").write_text(status + "\n" + log)
         raise AssertionError(f"ban state did not become {banned} for {client}")
 
     def reset(self):
-        self.fail2ban("unban", "--all")
-        self.fail2ban("set", JAIL, "maxretry", "15")
-        self.fail2ban("set", JAIL, "bantime", "3600")
-        # Reset the tracked failure counters as well as bans between scenarios.
-        self.fail2ban("reload", "--restart", JAIL)
-        self.fail2ban("unban", "--all")
+        # Stop the disposable daemon so neither reader nor restoration queues survive.
+        self.fail2ban("stop")
+        deadline = time.monotonic() + 10
+        while self.node("test ! -e /var/run/fail2ban/fail2ban.pid", check=False).returncode:
+            if time.monotonic() >= deadline:
+                raise AssertionError("fixture Fail2ban did not finish shutdown")
+            time.sleep(0.1)
+        # These database files exist only inside the disposable test node.
+        self.node("rm -f /var/lib/fail2ban/fail2ban.sqlite3 /var/lib/fail2ban/fail2ban.sqlite3-wal /var/lib/fail2ban/fail2ban.sqlite3-shm")
+        (LAB / "logs/auth.log").write_text("")
+        self.fail2ban("-x", "start")
         self.wait_banned("offender", False)
 
 
@@ -283,6 +291,28 @@ class ProxySecurityTests(unittest.TestCase):
         self.assertNotIn('private-probe-password', '\n'.join(events))
         self.assertNotIn('Proxy-Authorization', '\n'.join(events))
         self.lab.fetch()
+
+    def test_11_reset_discards_pending_events_from_previous_scenario(self):
+        # Hold the filter idle so prior events cannot be counted until restart.
+        self.lab.fail2ban("set", JAIL, "idle", "on")
+        for _ in range(20):
+            self.lab.fetch("offender", expected=407, password="wrong")
+        self.lab.reset()
+        # A restarted polling filter must not re-ban this fresh scenario.
+        time.sleep(1.5)
+        self.lab.wait_banned("offender", False)
+        status = self.lab.fail2ban("status", JAIL).stdout
+        self.assertRegex(status, r"Total failed:\s+0(?:\s|$)")
+        self.lab.fetch("offender")
+
+    def test_12_reset_discards_active_bans_from_previous_scenario(self):
+        for _ in range(15):
+            self.lab.fetch("offender", expected=407, password="wrong")
+        self.lab.wait_banned("offender")
+        self.lab.reset()
+        time.sleep(1.5)
+        self.lab.wait_banned("offender", False)
+        self.lab.fetch("offender")
 
 
 if __name__ == "__main__":
