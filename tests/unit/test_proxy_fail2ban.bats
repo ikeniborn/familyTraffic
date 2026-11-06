@@ -8,6 +8,37 @@ setup() {
     touch "$FT_PROXY_AUTH_LOG"
     chmod 600 "$FT_PROXY_AUTH_LOG"
 }
+
+@test "journal-only sshd setup preserves operator files and selects systemd" {
+    export FT_SSH_AUTH_LOG="$BATS_TEST_TMPDIR/missing-auth.log"
+    printf '[DEFAULT]\nbackend = auto\nsshd_log = /var/log/auth.log\n[sshd]\nenabled = true\nlogpath = %%(sshd_log)s\n' > "$FT_FAIL2BAN_DIR/jail.conf"
+    cp "$FT_FAIL2BAN_DIR/jail.conf" "$BATS_TEST_TMPDIR/original"
+    configure_sshd_journal_backend
+    cmp "$FT_FAIL2BAN_DIR/jail.conf" "$BATS_TEST_TMPDIR/original"
+    grep -qx 'backend = systemd' "$FT_FAIL2BAN_DIR/jail.d/familytraffic-sshd.local"
+    configure_sshd_journal_backend
+}
+
+@test "existing auth log and custom sshd backend remain unchanged" {
+    export FT_SSH_AUTH_LOG="$BATS_TEST_TMPDIR/auth.log"
+    touch "$FT_SSH_AUTH_LOG"
+    printf '[sshd]\nenabled = true\nbackend = auto\n' > "$FT_FAIL2BAN_DIR/jail.conf"
+    configure_sshd_journal_backend
+    [ ! -e "$FT_FAIL2BAN_DIR/jail.d/familytraffic-sshd.local" ]
+    rm "$FT_SSH_AUTH_LOG"
+    printf '[sshd]\nenabled = true\nbackend = polling\nlogpath = /custom/ssh.log\n' > "$FT_FAIL2BAN_DIR/jail.conf"
+    configure_sshd_journal_backend
+    [ ! -e "$FT_FAIL2BAN_DIR/jail.d/familytraffic-sshd.local" ]
+}
+
+@test "journal-only SSH setup resolves Debian backend and path includes" {
+    export FT_SSH_AUTH_LOG="$BATS_TEST_TMPDIR/missing-auth.log"
+    printf '[INCLUDES]\nbefore = paths-debian.conf\n[DEFAULT]\nbackend = auto\n[sshd]\nenabled = true\nbackend = %%(sshd_backend)s\nlogpath = %%(sshd_log)s\n' > "$FT_FAIL2BAN_DIR/jail.conf"
+    printf '[INCLUDES]\nbefore = paths-common.conf\n[DEFAULT]\nsyslog_authpriv = /var/log/auth.log\n' > "$FT_FAIL2BAN_DIR/paths-debian.conf"
+    printf '[DEFAULT]\ndefault_backend = %%(default/backend)s\nsshd_backend = %%(default_backend)s\nsshd_log = %%(syslog_authpriv)s\n' > "$FT_FAIL2BAN_DIR/paths-common.conf"
+    configure_sshd_journal_backend
+    grep -qx 'backend = systemd' "$FT_FAIL2BAN_DIR/jail.d/familytraffic-sshd.local"
+}
 @test "managed auth jail uses file polling exact ports and thresholds" {
     configure_proxy_auth_jail 1080,1081,8118,8119
     grep -q '^backend = polling$' "$FT_FAIL2BAN_DIR/jail.d/familytraffic-proxy-auth.conf"

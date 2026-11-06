@@ -797,6 +797,8 @@ remove_client_from_xray() {
 # =============================================================================
 apply_per_user_routing() {
     log_info "Applying per-user external proxy routing..."
+    local pending=false
+    if proxy_config_is_pending "$XRAY_CONFIG"; then pending=true; fi
 
     # Source xray_routing_manager to use routing functions
     local script_dir
@@ -849,8 +851,11 @@ apply_per_user_routing() {
         return 1
     }
 
-    jq --slurpfile routing "$routing_tmp" \
-        '.routing = $routing[0]' \
+    jq --slurpfile routing "$routing_tmp" --argjson pending "$pending" \
+        '.routing = $routing[0] |
+         if $pending then .routing.rules |=
+             ([{type:"field",inboundTag:["http-proxy","socks5-proxy"],outboundTag:"blocked"}] + .)
+         else . end' \
         "$XRAY_CONFIG" > "$temp_file"
 
     if [[ $? -ne 0 ]]; then
@@ -1068,9 +1073,14 @@ update_proxy_accounts() {
     local temp_file
     temp_file=$(mktemp)
 
+    local pending=false
+    if proxy_config_is_pending "$XRAY_CONFIG"; then pending=true; fi
+
     # Add account to SOCKS5 inbound
-    if ! jq --argjson account "$account_json" \
-       '(.inbounds[] | select(.tag == "socks5-proxy") | .settings.accounts) += [$account]' \
+    if ! jq --argjson account "$account_json" --argjson pending "$pending" \
+       'if $pending then .routing.rules |= .[1:] else . end |
+        (.inbounds[] | select(.tag == "socks5-proxy") | .settings.accounts) |=
+            (map(select(.user != "@ft-unprovisioned")) + [$account])' \
        "${XRAY_CONFIG}" > "$temp_file"; then
         log_error "Failed to update SOCKS5 proxy accounts"
         rm -f "$temp_file"
@@ -1083,7 +1093,8 @@ update_proxy_accounts() {
         temp_file2=$(mktemp)
 
         if ! jq --argjson account "$account_json" \
-           '(.inbounds[] | select(.tag == "http-proxy") | .settings.accounts) += [$account]' \
+           '(.inbounds[] | select(.tag == "http-proxy") | .settings.accounts) |=
+                (map(select(.user != "@ft-unprovisioned")) + [$account])' \
            "$temp_file" > "$temp_file2"; then
             log_error "Failed to update HTTP proxy accounts"
             rm -f "$temp_file" "$temp_file2"
@@ -1156,8 +1167,14 @@ rebuild_proxy_accounts_from_users_json() {
 
     local tmp
     tmp=$(mktemp)
-    if ! jq --argjson accs "$proxy_accounts" \
-       '(.inbounds[] | select(.tag == "socks5-proxy" or .tag == "http-proxy")
+    local pending=false
+    if proxy_config_is_pending "$XRAY_CONFIG"; then
+        if [[ "$(jq 'length' <<< "$proxy_accounts")" == 0 ]]; then rm -f "$tmp"; return 0; fi
+        pending=true
+    fi
+    if ! jq --argjson accs "$proxy_accounts" --argjson pending "$pending" \
+       'if $pending then .routing.rules |= .[1:] else . end |
+        (.inbounds[] | select(.tag == "socks5-proxy" or .tag == "http-proxy")
         | .settings.accounts) = $accs' \
        "${XRAY_CONFIG}" > "$tmp"; then
         rm -f "$tmp"

@@ -22,6 +22,7 @@ load '../test_helper'
             EMAIL=ops@example.com
         }
         ufw() { printf "Status: active\n"; }
+        configure_install_firewall() { return 0; }
         get_server_public_ip() { printf "%s\n" "203.0.113.10"; }
         validate_domain_dns() { return 0; }
         install_certbot() { return 0; }

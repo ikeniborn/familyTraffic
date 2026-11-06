@@ -109,6 +109,8 @@ collect_parameters() {
     fi
 
 
+    prompt_ssh_source || return 1
+
     # Step 5: Confirm all parameters
     confirm_parameters || {
         echo -e "${YELLOW}Configuration cancelled by user${NC}"
@@ -565,6 +567,7 @@ confirm_parameters() {
     echo -e "  ${YELLOW}Destination Site:${NC}    ${REALITY_DEST}:${REALITY_DEST_PORT}"
     echo -e "  ${YELLOW}Xray Internal Port:${NC}  ${VLESS_PORT} (nginx forwards from 443)"
     echo -e "  ${YELLOW}Docker Subnet:${NC}       ${DOCKER_SUBNET}"
+    echo -e "  ${YELLOW}SSH port 22 source:${NC}  ${SSH_ALLOW_FROM:-Any address} (existing rules preserved)"
 
     # v3.4: Display proxy mode with TLS status
     if [[ "$ENABLE_PUBLIC_PROXY" == "true" ]]; then
@@ -825,8 +828,9 @@ prompt_enable_public_proxy() {
     echo "  ✓ nginx TLS 1.3 termination (unified architecture)"
     echo "  ✓ Let's Encrypt certificates with auto-renewal"
     echo "  ✓ Xray username + password authentication (mandatory)"
-    echo "  ✓ Fail2ban (ban after 5 failed auth attempts)"
-    echo "  ✓ UFW rate limiting (10 connections/min per IP)"
+    echo "  ✓ Fail2ban (ban after 15 failed auth attempts)"
+    echo "  ✓ UFW rules for authenticated proxy listeners"
+    echo "  ✓ Proxy users can be added after installation; access stays locked until then"
     echo "  ✓ Optional UFW IP whitelisting (host firewall)"
     echo "  ✓ Xray routing rules (application-level IP filtering)"
     echo "  ✓ 32-character passwords (2^128 entropy)"

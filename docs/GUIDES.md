@@ -56,7 +56,7 @@ sudo ./install.sh
 5. **Прокси-режим** — включить SOCKS5/HTTP прокси или нет
 6. **Запуск** — генерация конфигов, старт контейнеров, выпуск сертификата
 
-По окончании установщик выведет URI и QR код для первого пользователя.
+Create users after installation and choose VPN, proxy, or both. Selected proxies remain configured and locked until the first proxy-enabled user exists. See [SSH/UFW and deferred proxy setup](INSTALLER_RECOVERY.md).
 
 **Файлы устанавливаются в `/opt/familytraffic/`:**
 
