@@ -56,7 +56,7 @@ sudo ./install.sh
 5. **Прокси-режим** — включить SOCKS5/HTTP прокси или нет
 6. **Запуск** — генерация конфигов, старт контейнеров, выпуск сертификата
 
-По окончании установщик выведет URI и QR код для первого пользователя.
+Create users after installation and choose VPN, proxy, or both. Selected proxies remain configured and locked until the first proxy-enabled user exists. See [SSH/UFW and deferred proxy setup](INSTALLER_RECOVERY.md).
 
 **Файлы устанавливаются в `/opt/familytraffic/`:**
 
@@ -618,10 +618,10 @@ without changing where CLI source files are found.
 
 ## Safe user removal
 
-`familytraffic remove-user` refuses to remove the last authenticated account from
-any managed HTTP or SOCKS5 proxy receiver. Add another proxy account before removing
-that user. When managed public proxy receivers are absent, this restriction does
-not apply.
+`familytraffic remove-user` can remove the last and all users. When no proxy users
+remain, selected proxy settings stay in place and proxy destinations are locked.
+Adding a new proxy-enabled user reactivates authenticated access. Account removal
+and the empty-state lock are staged together before live configuration publication.
 
 Removal holds the existing user database lock through configuration validation,
 application, and database commit. The database and client exports remain unchanged

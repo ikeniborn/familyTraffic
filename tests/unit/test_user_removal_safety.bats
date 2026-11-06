@@ -10,7 +10,7 @@ setup() {
 {"users":[{"username":"alice","uuid":"uuid-alice","connection_type":"proxy","proxy_password":"fixture-alice"},{"username":"bob","uuid":"uuid-bob","connection_type":"proxy","proxy_password":"fixture-bob"}]}
 JSON
     cat > "$XRAY_CONFIG" <<'JSON'
-{"inbounds":[{"tag":"reality","protocol":"vless","settings":{"clients":[{"id":"uuid-alice"},{"id":"uuid-bob"}]},"streamSettings":{"realitySettings":{"shortIds":[]}}},{"tag":"socks5-proxy","protocol":"socks","settings":{"auth":"password","accounts":[{"user":"alice","pass":"fixture-alice"},{"user":"bob","pass":"fixture-bob"}]}},{"tag":"http-proxy","protocol":"http","settings":{"accounts":[{"user":"alice","pass":"fixture-alice"},{"user":"bob","pass":"fixture-bob"}]}}]}
+{"inbounds":[{"tag":"reality","protocol":"vless","settings":{"clients":[{"id":"uuid-alice"},{"id":"uuid-bob"}]},"streamSettings":{"realitySettings":{"shortIds":[]}}},{"tag":"socks5-proxy","protocol":"socks","settings":{"auth":"password","accounts":[{"user":"alice","pass":"fixture-alice"},{"user":"bob","pass":"fixture-bob"}]}},{"tag":"http-proxy","protocol":"http","settings":{"accounts":[{"user":"alice","pass":"fixture-alice"},{"user":"bob","pass":"fixture-bob"}]}}],"outbounds":[{"tag":"direct","protocol":"freedom"},{"tag":"blocked","protocol":"blackhole"}],"routing":{"rules":[]}}
 JSON
     printf 'ENABLE_PUBLIC_PROXY=true\n' > "$ENV_FILE"
     mkdir -p "$CLIENTS_DIR/alice"
@@ -54,24 +54,41 @@ single_account() {
     cat "$BATS_TEST_TMPDIR/staged" > "$XRAY_CONFIG"
 }
 
-@test "last public proxy account removal fails without changing files or client exports" {
+watch_public_writes() {
+    eval "$(declare -f write_preserving_inode | sed '1s/write_preserving_inode/original_write/')"
+    write_preserving_inode() {
+        original_write "$@" || return 1
+        if [[ "$2" == "$XRAY_CONFIG" ]] && ! validate_proxy_auth_config "$XRAY_CONFIG" >/dev/null 2>&1; then
+            touch "$BATS_TEST_TMPDIR/unsafe-publication"
+        fi
+        return 0
+    }
+}
+
+@test "last public proxy account removal leaves an empty database and locked proxies" {
     single_account
     snapshot
     run remove_user alice
     echo "$output"
-    [ "$status" -ne 0 ]
-    [[ "$output" == *"last proxy account"* ]]
-    assert_unchanged
+    [ "$status" -eq 0 ]
+    jq -e '.users == []' "$USERS_JSON"
+    proxy_config_is_pending "$XRAY_CONFIG"
+    validate_saved_proxy_accounts "$XRAY_CONFIG" "$USERS_JSON"
+    cmp "$XRAY_CONFIG" "$BATS_TEST_TMPDIR/live.json"
+    [ ! -e "$CLIENTS_DIR/alice" ]
+    [ "$(stat -c %i "$XRAY_CONFIG")" = "$config_inode" ]
 }
 
-@test "legacy last account refusal does not migrate the database" {
+@test "legacy last combined account removal also closes empty proxies" {
     single_account
     jq 'del(.users[0].connection_type)' "$USERS_JSON" > "$BATS_TEST_TMPDIR/staged"
     cat "$BATS_TEST_TMPDIR/staged" > "$USERS_JSON"
     snapshot
     run remove_user alice
-    [ "$status" -ne 0 ]
-    assert_unchanged
+    [ "$status" -eq 0 ]
+    jq -e '.users == []' "$USERS_JSON"
+    proxy_config_is_pending "$XRAY_CONFIG"
+    jq -e '.inbounds[0].settings.clients | all(.id != "uuid-alice")' "$XRAY_CONFIG"
 }
 
 @test "reload failure preserves user database and restores config bytes and inode" {
@@ -145,7 +162,7 @@ single_account() {
     cmp "$XRAY_CONFIG" "$BATS_TEST_TMPDIR/live.json"
 }
 
-@test "concurrent removals retain one authenticated account" {
+@test "concurrent removals can delete all accounts and retain a proxy lock" {
     remove_user alice > "$BATS_TEST_TMPDIR/alice.log" 2>&1 &
     local alice_pid=$!
     remove_user bob > "$BATS_TEST_TMPDIR/bob.log" 2>&1 &
@@ -153,9 +170,54 @@ single_account() {
     local alice_status=0 bob_status=0
     wait "$alice_pid" || alice_status=$?
     wait "$bob_pid" || bob_status=$?
-    [ "$((alice_status + bob_status))" -eq 1 ]
-    jq -e '.users | length == 1' "$USERS_JSON"
-    jq -e --slurpfile users "$USERS_JSON" '[.inbounds[] | select(.tag == "socks5-proxy" or .tag == "http-proxy") | [.settings.accounts[].user]] == [[$users[0].users[0].username],[$users[0].users[0].username]]' "$XRAY_CONFIG"
+    [ "$((alice_status + bob_status))" -eq 0 ]
+    jq -e '.users == []' "$USERS_JSON"
+    proxy_config_is_pending "$XRAY_CONFIG"
+    validate_saved_proxy_accounts "$XRAY_CONFIG" "$USERS_JSON"
+    cmp "$XRAY_CONFIG" "$BATS_TEST_TMPDIR/live.json"
+}
+
+@test "last account activation failure restores user and previous authenticated config" {
+    single_account
+    snapshot
+    touch "$BATS_TEST_TMPDIR/fail-reload"
+    run remove_user alice
+    [ "$status" -ne 0 ]
+    assert_unchanged
+    ! proxy_config_is_pending "$XRAY_CONFIG"
+}
+
+@test "last account removal never publishes empty unauthenticated receivers" {
+    single_account
+    watch_public_writes
+    run remove_user alice
+    [ "$status" -eq 0 ]
+    [ ! -e "$BATS_TEST_TMPDIR/unsafe-publication" ]
+    proxy_config_is_pending "$XRAY_CONFIG"
+}
+
+@test "pending initialization failure never publishes an unsafe configuration" {
+    single_account
+    snapshot
+    watch_public_writes
+    initialize_pending_proxy_config() { return 1; }
+    run remove_user alice
+    [ "$status" -ne 0 ]
+    [ ! -e "$BATS_TEST_TMPDIR/unsafe-publication" ]
+    assert_unchanged
+}
+
+@test "last account database failure restores user and live authenticated config" {
+    single_account
+    snapshot
+    eval "$(declare -f write_preserving_inode | sed '1s/write_preserving_inode/original_write/')"
+    write_preserving_inode() {
+        if [[ "$1" == */users.next ]]; then return 1; fi
+        original_write "$@"
+    }
+    run remove_user alice
+    [ "$status" -ne 0 ]
+    assert_unchanged
     cmp "$XRAY_CONFIG" "$BATS_TEST_TMPDIR/live.json"
 }
 

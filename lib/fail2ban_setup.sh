@@ -44,6 +44,35 @@ check_fail2ban_installed() {
     fi
 }
 
+# Debian enables sshd with a file backend even on hosts that only keep a journal.
+configure_sshd_journal_backend() {
+    [[ ! -e "${FT_SSH_AUTH_LOG:-/var/log/auth.log}" ]] || return 0
+    /usr/bin/python3 - "${FT_FAIL2BAN_DIR:-/etc/fail2ban}" <<'PY'
+import os,pathlib,sys
+from fail2ban.client.configparserinc import SafeConfigParserWithIncludes
+base=pathlib.Path(sys.argv[1])
+config=SafeConfigParserWithIncludes()
+config.read([str(path) for path in [base/'jail.conf', *sorted((base/'jail.d').glob('*.conf')),
+             base/'jail.local', *sorted((base/'jail.d').glob('*.local'))]])
+if not config.has_section('sshd') or not config.getboolean('sshd','enabled',fallback=False):
+    sys.exit(0)
+if config.get('sshd','backend',fallback='auto') != 'auto':
+    sys.exit(0)
+if config.get('sshd','logpath',fallback='%(sshd_log)s') not in ('%(sshd_log)s','/var/log/auth.log'):
+    sys.exit(0)
+import systemd.journal
+target=base/'jail.d/familytraffic-sshd.local'
+text='[sshd]\nbackend = systemd\n'
+if target.exists() or target.is_symlink():
+    if target.is_symlink() or target.read_text()!=text:
+        raise SystemExit('Existing SSH jail override requires operator review')
+else:
+    with target.open('x') as out:
+        out.write(text)
+    os.chmod(target,0o644)
+PY
+}
+
 # =============================================================================
 # FUNCTION: install_fail2ban
 # =============================================================================
