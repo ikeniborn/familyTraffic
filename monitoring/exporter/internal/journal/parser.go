@@ -29,7 +29,7 @@ func host(value string) (string, error) {
 	for _, prefix := range []string{"tcp:", "udp:"} {
 		value = strings.TrimPrefix(value, prefix)
 	}
-	if strings.Contains(value, "://") {
+	if strings.HasPrefix(value, "//") || strings.Contains(value, "://") {
 		u, err := url.Parse(value)
 		if err != nil || u.Hostname() == "" {
 			return "", errors.New("invalid destination")
@@ -71,6 +71,9 @@ func Parse(source, line string, now time.Time) ([]Event, error) {
 			return nil, errors.New("invalid access record")
 		}
 		inbound := m[4]
+		if inbound == "traffic-api" {
+			return nil, nil
+		}
 		if !token.MatchString(inbound) {
 			inbound = "unknown"
 		}

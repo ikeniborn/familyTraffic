@@ -41,3 +41,15 @@ func TestFrontendAndBans(t *testing.T) {
 		t.Fatalf("%v %v", e, err)
 	}
 }
+func TestConnectAuthorityURLPreservesDestination(t *testing.T) {
+	events, err := Parse("access", "2026/11/06 12:00:00.123 from tcp:192.0.2.1:1234 accepted //target.lab:443 [http-proxy -> direct] email: fixture-user", time.Now())
+	if err != nil || len(events) != 2 || events[1].Labels["destination"] != "target.lab:443" {
+		t.Fatalf("events=%v error=%v", events, err)
+	}
+}
+func TestStatsAPIRequestsAreNotUserAccess(t *testing.T) {
+	events, err := Parse("access", "2026/11/06 05:48:37 from 127.0.0.1:54800 accepted tcp:127.0.0.1:0 [traffic-api -> traffic-api]", time.Now())
+	if err != nil || len(events) != 0 {
+		t.Fatalf("admin API counted as user access: %v %v", events, err)
+	}
+}
