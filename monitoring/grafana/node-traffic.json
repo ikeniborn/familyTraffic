@@ -1,0 +1,1404 @@
+{
+  "uid": "node-traffic",
+  "title": "Node · Traffic",
+  "schemaVersion": 39,
+  "version": 1,
+  "tags": [
+    "familytraffic",
+    "traffic"
+  ],
+  "timezone": "browser",
+  "refresh": "30s",
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "templating": {
+    "list": [
+      {
+        "name": "DS_PROMETHEUS",
+        "type": "datasource",
+        "query": "prometheus",
+        "current": {}
+      },
+      {
+        "name": "node",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${DS_PROMETHEUS}"
+        },
+        "query": "label_values(up{job=\"familytraffic\"}, instance)",
+        "includeAll": true,
+        "allValue": ".*",
+        "refresh": 2,
+        "current": {
+          "text": "All",
+          "value": "$__all"
+        }
+      },
+      {
+        "name": "user",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${DS_PROMETHEUS}"
+        },
+        "query": "query_result(topk(200, count by (user_id) (count_over_time(familytraffic_user_bytes_total{instance=~\"$node\"}[$__range]))))",
+        "regex": "/user_id=\"([^\"]+)\"/",
+        "includeAll": true,
+        "allValue": ".*",
+        "multi": true,
+        "allowCustomValue": true,
+        "refresh": 2,
+        "current": {
+          "text": "All",
+          "value": "$__all"
+        }
+      },
+      {
+        "name": "inbound",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${DS_PROMETHEUS}"
+        },
+        "query": "query_result(topk(200, count by (inbound) (count_over_time(familytraffic_inbound_bytes_total{instance=~\"$node\"}[$__range]))))",
+        "regex": "/inbound=\"([^\"]+)\"/",
+        "includeAll": true,
+        "allValue": ".*",
+        "multi": true,
+        "allowCustomValue": true,
+        "refresh": 2,
+        "current": {
+          "text": "All",
+          "value": "$__all"
+        }
+      },
+      {
+        "name": "client",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${DS_PROMETHEUS}"
+        },
+        "query": "query_result(topk(200, count by (client_ip) (count_over_time(familytraffic_access_events_total{instance=~\"$node\"}[$__range]))))",
+        "regex": "/client_ip=\"([^\"]+)\"/",
+        "includeAll": true,
+        "allValue": ".*",
+        "multi": true,
+        "allowCustomValue": true,
+        "refresh": 2,
+        "current": {
+          "text": "All",
+          "value": "$__all"
+        }
+      },
+      {
+        "name": "destination",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${DS_PROMETHEUS}"
+        },
+        "query": "query_result(topk(200, count by (destination) (count_over_time(familytraffic_access_events_total{instance=~\"$node\"}[$__range]))))",
+        "regex": "/destination=\"([^\"]+)\"/",
+        "includeAll": true,
+        "allValue": ".*",
+        "multi": true,
+        "allowCustomValue": true,
+        "refresh": 2,
+        "current": {
+          "text": "All",
+          "value": "$__all"
+        }
+      },
+      {
+        "name": "account_class",
+        "label": "Account Class",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${DS_PROMETHEUS}"
+        },
+        "query": "query_result(topk(200, count by (account_class) (count_over_time(familytraffic_user_bytes_total{job=\"familytraffic\",instance=~\"$node\"}[$__range]))))",
+        "regex": "/account_class=\"([^\"]+)\"/",
+        "includeAll": true,
+        "allValue": ".*",
+        "multi": true,
+        "allowCustomValue": true,
+        "refresh": 2,
+        "current": {
+          "text": "All",
+          "value": "$__all"
+        }
+      },
+      {
+        "name": "listener",
+        "label": "Listener",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${DS_PROMETHEUS}"
+        },
+        "query": "query_result(topk(200, count by (listener) (count_over_time(familytraffic_frontend_bytes_total{job=\"familytraffic\",instance=~\"$node\"}[$__range]))))",
+        "regex": "/listener=\"([^\"]+)\"/",
+        "includeAll": true,
+        "allValue": ".*",
+        "multi": true,
+        "allowCustomValue": true,
+        "refresh": 2,
+        "current": {
+          "text": "All",
+          "value": "$__all"
+        }
+      },
+      {
+        "name": "jail",
+        "label": "Jail",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${DS_PROMETHEUS}"
+        },
+        "query": "query_result(topk(200, count by (jail) (count_over_time(familytraffic_fail2ban_banned{job=\"familytraffic\",instance=~\"$node\"}[$__range]))))",
+        "regex": "/jail=\"([^\"]+)\"/",
+        "includeAll": true,
+        "allValue": ".*",
+        "multi": true,
+        "allowCustomValue": true,
+        "refresh": 2,
+        "current": {
+          "text": "All",
+          "value": "$__all"
+        }
+      },
+      {
+        "name": "protocol",
+        "label": "Protocol",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${DS_PROMETHEUS}"
+        },
+        "query": "query_result(topk(200, count by (protocol) (count_over_time(familytraffic_auth_failures_total{job=\"familytraffic\",instance=~\"$node\"}[$__range]))))",
+        "regex": "/protocol=\"([^\"]+)\"/",
+        "includeAll": true,
+        "allValue": ".*",
+        "multi": true,
+        "allowCustomValue": true,
+        "refresh": 2,
+        "current": {
+          "text": "All",
+          "value": "$__all"
+        }
+      },
+      {
+        "name": "source",
+        "label": "Source",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${DS_PROMETHEUS}"
+        },
+        "query": "query_result(topk(200, count by (source) (count_over_time(familytraffic_source_up{job=\"familytraffic\",instance=~\"$node\"}[$__range]))))",
+        "regex": "/source=\"([^\"]+)\"/",
+        "includeAll": true,
+        "allValue": ".*",
+        "multi": true,
+        "allowCustomValue": true,
+        "refresh": 2,
+        "current": {
+          "text": "All",
+          "value": "$__all"
+        }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "row",
+      "title": "Health",
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 24,
+        "h": 1
+      },
+      "collapsed": false
+    },
+    {
+      "id": 2,
+      "title": "Collection source availability",
+      "type": "table",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Filters: node, source. Other dashboard filters do not apply. 0 means unavailable. Missing data is unknown, never zero-filled.",
+      "gridPos": {
+        "x": 0,
+        "y": 1,
+        "w": 24,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "familytraffic_source_up{source=~\"${source:regex}\",job=\"familytraffic\",instance=~\"$node\"}",
+          "legendFormat": "{{user_id}} {{account_class}} {{inbound}} {{listener}} {{direction}} {{source}} {{reason}} {{jail}} {{action}}",
+          "format": "table",
+          "instant": true
+        },
+        {
+          "refId": "B",
+          "expr": "up{job=\"familytraffic\",instance=~\"$node\"}",
+          "legendFormat": "Prometheus scrape",
+          "format": "table",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "Unknown"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        },
+        "spanNulls": false
+      }
+    },
+    {
+      "id": 3,
+      "title": "Collection freshness",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Filters: node, source. Other dashboard filters do not apply. ",
+      "gridPos": {
+        "x": 0,
+        "y": 8,
+        "w": 24,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "time() - familytraffic_last_success_timestamp_seconds{source=~\"${source:regex}\",job=\"familytraffic\",instance=~\"$node\"}",
+          "legendFormat": "{{user_id}} {{account_class}} {{inbound}} {{listener}} {{direction}} {{source}} {{reason}} {{jail}} {{action}}",
+          "format": "time_series",
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "noValue": "Unknown"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        },
+        "spanNulls": false
+      }
+    },
+    {
+      "id": 4,
+      "title": "Address completeness: overflow and collection gaps",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Filters: node. Other dashboard filters do not apply. Independent quality signals. Missing series mean unknown; an absent counter must not suppress another signal. Nonzero gaps or overflow mean incomplete analytics.",
+      "gridPos": {
+        "x": 0,
+        "y": 15,
+        "w": 24,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by(instance) (increase(familytraffic_detail_overflow_total{job=\"familytraffic\",instance=~\"$node\"}[$__range]))",
+          "legendFormat": "familytraffic_detail_overflow_total",
+          "format": "time_series",
+          "instant": false
+        },
+        {
+          "refId": "B",
+          "expr": "sum by(instance) (increase(familytraffic_collection_gaps_total{job=\"familytraffic\",instance=~\"$node\"}[$__range]))",
+          "legendFormat": "familytraffic_collection_gaps_total",
+          "format": "time_series",
+          "instant": false
+        },
+        {
+          "refId": "C",
+          "expr": "sum by(instance) (increase(familytraffic_auth_collection_gaps_total{job=\"familytraffic\",instance=~\"$node\"}[$__range]))",
+          "legendFormat": "familytraffic_auth_collection_gaps_total",
+          "format": "time_series",
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "Unknown"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        },
+        "spanNulls": false
+      }
+    },
+    {
+      "id": 5,
+      "type": "row",
+      "title": "Traffic",
+      "gridPos": {
+        "x": 0,
+        "y": 22,
+        "w": 24,
+        "h": 1
+      },
+      "collapsed": false
+    },
+    {
+      "id": 6,
+      "title": "Native inbound upload/download",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Filters: node, inbound. Other dashboard filters do not apply. Scope: node and inbound. Shared proxy inbound combines TLS/plaintext. Native Vision counters can update on flow closure.",
+      "gridPos": {
+        "x": 0,
+        "y": 23,
+        "w": 24,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (inbound,direction) (rate(familytraffic_inbound_bytes_total{job=\"familytraffic\",instance=~\"$node\",inbound=~\"${inbound:regex}\"}[5m]))",
+          "legendFormat": "{{user_id}} {{account_class}} {{inbound}} {{listener}} {{direction}} {{source}} {{reason}} {{jail}} {{action}}",
+          "format": "time_series",
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "Bps",
+          "noValue": "Unknown"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        },
+        "spanNulls": false
+      }
+    },
+    {
+      "id": 7,
+      "title": "Estimated inbound volume",
+      "type": "table",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Filters: node, inbound. Other dashboard filters do not apply. Estimated from sampled counters. Other filters do not apply.",
+      "gridPos": {
+        "x": 0,
+        "y": 30,
+        "w": 24,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (inbound,direction) (increase(familytraffic_inbound_bytes_total{job=\"familytraffic\",instance=~\"$node\",inbound=~\"${inbound:regex}\"}[$__range]))",
+          "legendFormat": "{{user_id}} {{account_class}} {{inbound}} {{listener}} {{direction}} {{source}} {{reason}} {{jail}} {{action}}",
+          "format": "table",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "noValue": "Unknown"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        },
+        "spanNulls": false
+      }
+    },
+    {
+      "id": 8,
+      "type": "row",
+      "title": "Users",
+      "gridPos": {
+        "x": 0,
+        "y": 37,
+        "w": 24,
+        "h": 1
+      },
+      "collapsed": false
+    },
+    {
+      "id": 9,
+      "title": "User traffic rate",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Filters: node, user, account class. Other dashboard filters do not apply. Scope: node and user only. HTTP/SOCKS usernames share proxy totals. Client, destination and inbound filters do not apply. Vision rates may be delayed.",
+      "gridPos": {
+        "x": 0,
+        "y": 38,
+        "w": 24,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by(user_id,account_class,direction) (rate(familytraffic_user_bytes_total{account_class=~\"${account_class:regex}\",job=\"familytraffic\",instance=~\"$node\",user_id=~\"${user:regex}\"}[5m]))",
+          "legendFormat": "{{user_id}} {{account_class}} {{inbound}} {{listener}} {{direction}} {{source}} {{reason}} {{jail}} {{action}}",
+          "format": "time_series",
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "Bps",
+          "noValue": "Unknown"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        },
+        "spanNulls": false
+      }
+    },
+    {
+      "id": 10,
+      "title": "Estimated user volume",
+      "type": "table",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Filters: node, user, account class. Other dashboard filters do not apply. ",
+      "gridPos": {
+        "x": 0,
+        "y": 45,
+        "w": 24,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by(user_id,account_class,direction) (increase(familytraffic_user_bytes_total{account_class=~\"${account_class:regex}\",job=\"familytraffic\",instance=~\"$node\",user_id=~\"${user:regex}\"}[$__range]))",
+          "legendFormat": "{{user_id}} {{account_class}} {{inbound}} {{listener}} {{direction}} {{source}} {{reason}} {{jail}} {{action}}",
+          "format": "table",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "noValue": "Unknown"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        },
+        "spanNulls": false
+      }
+    },
+    {
+      "id": 11,
+      "type": "row",
+      "title": "Frontends",
+      "gridPos": {
+        "x": 0,
+        "y": 52,
+        "w": 24,
+        "h": 1
+      },
+      "collapsed": false
+    },
+    {
+      "id": 12,
+      "title": "Completed session bytes by public listener",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Filters: node, listener. Other dashboard filters do not apply. Scope: node only. HTTPS/SOCKS5S/plaintext are distinguished here. Completed sessions only; do not add to native Xray byte totals.",
+      "gridPos": {
+        "x": 0,
+        "y": 53,
+        "w": 24,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by(listener,direction) (rate(familytraffic_frontend_bytes_total{listener=~\"${listener:regex}\",job=\"familytraffic\",instance=~\"$node\"}[5m]))",
+          "legendFormat": "{{user_id}} {{account_class}} {{inbound}} {{listener}} {{direction}} {{source}} {{reason}} {{jail}} {{action}}",
+          "format": "time_series",
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "Bps",
+          "noValue": "Unknown"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        },
+        "spanNulls": false
+      }
+    },
+    {
+      "id": 13,
+      "title": "Frontend session outcomes",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Filters: node, listener. Other dashboard filters do not apply. ",
+      "gridPos": {
+        "x": 0,
+        "y": 60,
+        "w": 24,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by(listener,status) (rate(familytraffic_frontend_sessions_total{listener=~\"${listener:regex}\",job=\"familytraffic\",instance=~\"$node\"}[5m]))",
+          "legendFormat": "{{user_id}} {{account_class}} {{inbound}} {{listener}} {{direction}} {{source}} {{reason}} {{jail}} {{action}}",
+          "format": "time_series",
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "Unknown"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        },
+        "spanNulls": false
+      }
+    },
+    {
+      "id": 14,
+      "type": "row",
+      "title": "Addresses",
+      "gridPos": {
+        "x": 0,
+        "y": 67,
+        "w": 24,
+        "h": 1
+      },
+      "collapsed": false
+    },
+    {
+      "id": 15,
+      "title": "User → client → destination access events",
+      "type": "table",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Filters: node, user, inbound, client, destination. Other dashboard filters do not apply. Access-event count, not bytes or unique TCP sessions. Accepted means dispatched, not remote success. unknown/loopback is never asserted as original user IP.",
+      "gridPos": {
+        "x": 0,
+        "y": 68,
+        "w": 24,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by(user_id,client_ip,destination,inbound) (increase(familytraffic_access_events_total{job=\"familytraffic\",instance=~\"$node\",user_id=~\"${user:regex}\",inbound=~\"${inbound:regex}\",client_ip=~\"${client:regex}\",destination=~\"${destination:regex}\"}[$__range]))",
+          "legendFormat": "{{user_id}} {{account_class}} {{inbound}} {{listener}} {{direction}} {{source}} {{reason}} {{jail}} {{action}}",
+          "format": "table",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "Unknown"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        },
+        "spanNulls": false
+      }
+    },
+    {
+      "id": 16,
+      "title": "Top destinations by access events",
+      "type": "table",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Filters: node, user, inbound, client, destination. Other dashboard filters do not apply. ",
+      "gridPos": {
+        "x": 0,
+        "y": 75,
+        "w": 24,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "topk(20,sum by(destination) (increase(familytraffic_access_events_total{job=\"familytraffic\",instance=~\"$node\",user_id=~\"${user:regex}\",inbound=~\"${inbound:regex}\",client_ip=~\"${client:regex}\",destination=~\"${destination:regex}\"}[$__range])))",
+          "legendFormat": "{{user_id}} {{account_class}} {{inbound}} {{listener}} {{direction}} {{source}} {{reason}} {{jail}} {{action}}",
+          "format": "table",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "Unknown"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        },
+        "spanNulls": false
+      }
+    },
+    {
+      "id": 17,
+      "title": "Top clients by access events",
+      "type": "table",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Filters: node, user, inbound, client, destination. Other dashboard filters do not apply. ",
+      "gridPos": {
+        "x": 0,
+        "y": 82,
+        "w": 24,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "topk(20,sum by(client_ip) (increase(familytraffic_access_events_total{job=\"familytraffic\",instance=~\"$node\",user_id=~\"${user:regex}\",inbound=~\"${inbound:regex}\",client_ip=~\"${client:regex}\",destination=~\"${destination:regex}\"}[$__range])))",
+          "legendFormat": "{{user_id}} {{account_class}} {{inbound}} {{listener}} {{direction}} {{source}} {{reason}} {{jail}} {{action}}",
+          "format": "table",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "Unknown"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        },
+        "spanNulls": false
+      }
+    },
+    {
+      "id": 18,
+      "type": "row",
+      "title": "Errors",
+      "gridPos": {
+        "x": 0,
+        "y": 89,
+        "w": 24,
+        "h": 1
+      },
+      "collapsed": false
+    },
+    {
+      "id": 19,
+      "title": "Authentication failures",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Filters: node, protocol. Other dashboard filters do not apply. Claimed usernames are not authenticated identities and are not exported.",
+      "gridPos": {
+        "x": 0,
+        "y": 90,
+        "w": 24,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by(protocol) (increase(familytraffic_auth_failures_total{protocol=~\"${protocol:regex}\",job=\"familytraffic\",instance=~\"$node\"}[$__range]))",
+          "legendFormat": "{{user_id}} {{account_class}} {{inbound}} {{listener}} {{direction}} {{source}} {{reason}} {{jail}} {{action}}",
+          "format": "time_series",
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "Unknown"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        },
+        "spanNulls": false
+      }
+    },
+    {
+      "id": 20,
+      "title": "Xray warnings and errors",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Filters: node, source. Other dashboard filters do not apply. ",
+      "gridPos": {
+        "x": 0,
+        "y": 97,
+        "w": 24,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by(reason) (rate(familytraffic_errors_total{source=~\"${source:regex}\",job=\"familytraffic\",instance=~\"$node\"}[5m]))",
+          "legendFormat": "{{user_id}} {{account_class}} {{inbound}} {{listener}} {{direction}} {{source}} {{reason}} {{jail}} {{action}}",
+          "format": "time_series",
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "Unknown"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        },
+        "spanNulls": false
+      }
+    },
+    {
+      "id": 21,
+      "type": "row",
+      "title": "Blocking",
+      "gridPos": {
+        "x": 0,
+        "y": 104,
+        "w": 24,
+        "h": 1
+      },
+      "collapsed": false
+    },
+    {
+      "id": 22,
+      "title": "Current bans by jail",
+      "type": "table",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Filters: node, jail. Other dashboard filters do not apply. ",
+      "gridPos": {
+        "x": 0,
+        "y": 105,
+        "w": 24,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "familytraffic_fail2ban_banned{jail=~\"${jail:regex}\",job=\"familytraffic\",instance=~\"$node\"}",
+          "legendFormat": "{{user_id}} {{account_class}} {{inbound}} {{listener}} {{direction}} {{source}} {{reason}} {{jail}} {{action}}",
+          "format": "table",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "Unknown"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        },
+        "spanNulls": false
+      }
+    },
+    {
+      "id": 23,
+      "title": "Active blocked IPs",
+      "type": "table",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Filters: node, jail. Other dashboard filters do not apply. IP blocks, not user bans. Details capped at 1000; inspect overflow separately.",
+      "gridPos": {
+        "x": 0,
+        "y": 112,
+        "w": 24,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "familytraffic_fail2ban_ip_banned{jail=~\"${jail:regex}\",job=\"familytraffic\",instance=~\"$node\"}",
+          "legendFormat": "{{user_id}} {{account_class}} {{inbound}} {{listener}} {{direction}} {{source}} {{reason}} {{jail}} {{action}}",
+          "format": "table",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "Unknown"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        },
+        "spanNulls": false
+      }
+    },
+    {
+      "id": 24,
+      "title": "Ban, unban and restore events",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Filters: node, jail. Other dashboard filters do not apply. ",
+      "gridPos": {
+        "x": 0,
+        "y": 119,
+        "w": 24,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by(jail,action) (increase(familytraffic_fail2ban_events_total{jail=~\"${jail:regex}\",job=\"familytraffic\",instance=~\"$node\"}[$__range]))",
+          "legendFormat": "{{user_id}} {{account_class}} {{inbound}} {{listener}} {{direction}} {{source}} {{reason}} {{jail}} {{action}}",
+          "format": "time_series",
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "Unknown"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        },
+        "spanNulls": false
+      }
+    },
+    {
+      "id": 25,
+      "type": "row",
+      "title": "Exporter",
+      "gridPos": {
+        "x": 0,
+        "y": 126,
+        "w": 24,
+        "h": 1
+      },
+      "collapsed": false
+    },
+    {
+      "id": 26,
+      "title": "Address detail budget used",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Filters: node. Other dashboard filters do not apply. ",
+      "gridPos": {
+        "x": 0,
+        "y": 127,
+        "w": 24,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "familytraffic_detail_series{job=\"familytraffic\",instance=~\"$node\"}",
+          "legendFormat": "{{user_id}} {{account_class}} {{inbound}} {{listener}} {{direction}} {{source}} {{reason}} {{jail}} {{action}}",
+          "format": "time_series",
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "Unknown"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        },
+        "spanNulls": false
+      }
+    },
+    {
+      "id": 27,
+      "title": "Detail overflow",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Filters: node. Other dashboard filters do not apply. ",
+      "gridPos": {
+        "x": 0,
+        "y": 134,
+        "w": 24,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "increase(familytraffic_detail_overflow_total{job=\"familytraffic\",instance=~\"$node\"}[$__range])",
+          "legendFormat": "{{user_id}} {{account_class}} {{inbound}} {{listener}} {{direction}} {{source}} {{reason}} {{jail}} {{action}}",
+          "format": "time_series",
+          "instant": false
+        },
+        {
+          "refId": "B",
+          "expr": "familytraffic_fail2ban_ip_overflow{job=\"familytraffic\",instance=~\"$node\",jail=~\"${jail:regex}\"}",
+          "legendFormat": "omitted banned IPs {{jail}}",
+          "format": "time_series",
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "Unknown"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        },
+        "spanNulls": false
+      }
+    },
+    {
+      "id": 28,
+      "title": "Collection gaps",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Filters: node. Other dashboard filters do not apply. ",
+      "gridPos": {
+        "x": 0,
+        "y": 141,
+        "w": 24,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "increase(familytraffic_collection_gaps_total{job=\"familytraffic\",instance=~\"$node\"}[$__range])",
+          "legendFormat": "{{user_id}} {{account_class}} {{inbound}} {{listener}} {{direction}} {{source}} {{reason}} {{jail}} {{action}}",
+          "format": "time_series",
+          "instant": false
+        },
+        {
+          "refId": "B",
+          "expr": "increase(familytraffic_auth_collection_gaps_total{job=\"familytraffic\",instance=~\"$node\"}[$__range])",
+          "legendFormat": "auth helper gaps",
+          "format": "time_series",
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "Unknown"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        },
+        "spanNulls": false
+      }
+    },
+    {
+      "id": 29,
+      "title": "Parser failures",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Filters: node. Other dashboard filters do not apply. ",
+      "gridPos": {
+        "x": 0,
+        "y": 148,
+        "w": 24,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "rate(familytraffic_parse_errors_total{job=\"familytraffic\",instance=~\"$node\"}[5m])",
+          "legendFormat": "{{user_id}} {{account_class}} {{inbound}} {{listener}} {{direction}} {{source}} {{reason}} {{jail}} {{action}}",
+          "format": "time_series",
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "Unknown"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        },
+        "spanNulls": false
+      }
+    },
+    {
+      "id": 30,
+      "title": "Checkpoint age",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Filters: node. Other dashboard filters do not apply. Idle sources naturally have old checkpoints. Alert only when events are arriving.",
+      "gridPos": {
+        "x": 0,
+        "y": 155,
+        "w": 24,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "familytraffic_checkpoint_age_seconds{job=\"familytraffic\",instance=~\"$node\"}",
+          "legendFormat": "{{user_id}} {{account_class}} {{inbound}} {{listener}} {{direction}} {{source}} {{reason}} {{jail}} {{action}}",
+          "format": "time_series",
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "noValue": "Unknown"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        },
+        "spanNulls": false
+      }
+    },
+    {
+      "id": 31,
+      "title": "Exporter memory",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Filters: node. Other dashboard filters do not apply. ",
+      "gridPos": {
+        "x": 0,
+        "y": 162,
+        "w": 24,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "process_resident_memory_bytes{job=\"familytraffic\",instance=~\"$node\"}",
+          "legendFormat": "{{user_id}} {{account_class}} {{inbound}} {{listener}} {{direction}} {{source}} {{reason}} {{jail}} {{action}}",
+          "format": "time_series",
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "noValue": "Unknown"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        },
+        "spanNulls": false
+      }
+    },
+    {
+      "id": 32,
+      "title": "Exporter CPU",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Filters: node. Other dashboard filters do not apply. ",
+      "gridPos": {
+        "x": 0,
+        "y": 169,
+        "w": 24,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "rate(process_cpu_seconds_total{job=\"familytraffic\",instance=~\"$node\"}[5m])",
+          "legendFormat": "{{user_id}} {{account_class}} {{inbound}} {{listener}} {{direction}} {{source}} {{reason}} {{jail}} {{action}}",
+          "format": "time_series",
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "noValue": "Unknown"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        },
+        "spanNulls": false
+      }
+    },
+    {
+      "id": 33,
+      "title": "Scrape duration",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Filters: node. Other dashboard filters do not apply. ",
+      "gridPos": {
+        "x": 0,
+        "y": 176,
+        "w": 24,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "scrape_duration_seconds{job=\"familytraffic\",instance=~\"$node\"}",
+          "legendFormat": "{{user_id}} {{account_class}} {{inbound}} {{listener}} {{direction}} {{source}} {{reason}} {{jail}} {{action}}",
+          "format": "time_series",
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "noValue": "Unknown"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        },
+        "spanNulls": false
+      }
+    }
+  ],
+  "annotations": {
+    "list": []
+  }
+}
