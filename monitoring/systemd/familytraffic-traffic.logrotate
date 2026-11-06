@@ -1,0 +1,21 @@
+/opt/familytraffic/logs/xray/access.log /opt/familytraffic/logs/nginx/traffic.log {
+    hourly
+    rotate 24
+    maxage 1
+    maxsize 10M
+    missingok
+    notifempty
+    copytruncate
+    nocompress
+    create 0640 root familytraffic-monitoring
+    sharedscripts
+    postrotate
+        for directory in /opt/familytraffic/logs/xray /opt/familytraffic/logs/nginx; do
+            date +%s%N > "$directory/traffic-rotation-generation.new"
+            chmod 0644 "$directory/traffic-rotation-generation.new"
+            sync -f "$directory/traffic-rotation-generation.new"
+            mv "$directory/traffic-rotation-generation.new" "$directory/traffic-rotation-generation"
+            sync -f "$directory"
+        done
+    endscript
+}

@@ -1,0 +1,53 @@
+groups:
+- name: familytraffic
+  rules:
+  - alert: FamilyTrafficExporterUnavailable
+    expr: up{job="familytraffic"} == 0 or absent(up{job="familytraffic"})
+    for: 2m
+    labels:
+      severity: warning
+    annotations:
+      summary: familyTraffic exporter unavailable
+  - alert: FamilyTrafficSourceUnavailable
+    expr: familytraffic_source_up{job="familytraffic"} == 0 or (up{job="familytraffic"} == 1 unless on(job, instance) familytraffic_source_up{job="familytraffic"})
+    for: 2m
+    labels:
+      severity: warning
+    annotations:
+      summary: familyTraffic collection source unavailable
+  - alert: FamilyTrafficDetailBudget
+    expr: familytraffic_detail_series{job="familytraffic",family="access"} > 8000
+    for: 5m
+    labels:
+      severity: warning
+    annotations:
+      summary: familyTraffic address series budget above 80 percent
+  - alert: FamilyTrafficAccountingGap
+    expr: increase(familytraffic_collection_gaps_total{job="familytraffic"}[5m]) > 0 or increase(familytraffic_auth_collection_gaps_total{job="familytraffic"}[5m])
+      > 0
+    labels:
+      severity: critical
+    annotations:
+      summary: familyTraffic journal data incomplete
+  - alert: FamilyTrafficDetailOverflow
+    expr: increase(familytraffic_detail_overflow_total{job="familytraffic"}[5m]) > 0 or familytraffic_fail2ban_ip_overflow{job="familytraffic"}
+      > 0
+    labels:
+      severity: warning
+    annotations:
+      summary: familyTraffic detail omitted by series budget
+  - alert: FamilyTrafficCheckpointStalled
+    expr: familytraffic_checkpoint_age_seconds{job="familytraffic"} > 120 and on(instance) sum by(instance) (rate(familytraffic_access_total{job="familytraffic"}[5m]))
+      > 0
+    for: 2m
+    labels:
+      severity: warning
+    annotations:
+      summary: familyTraffic checkpoint stale while access counters advance
+  - alert: FamilyTrafficSourceStale
+    expr: time() - familytraffic_last_success_timestamp_seconds{job="familytraffic"} > 120
+    for: 2m
+    labels:
+      severity: warning
+    annotations:
+      summary: familyTraffic source measurements stale
