@@ -1,4 +1,11 @@
 ---
+result_check:
+  verdict: OK
+  source: plan
+  plan_hash: 2317eb0ed3b3b27f
+  last_run: 2026-11-06
+  reviewed: true
+  docs_checked: true
 chain:
   intent: docs/superpowers/intents/2026-11-05-proxy-vless-traffic-monitoring-intent.md
   spec: docs/superpowers/specs/2026-11-05-proxy-vless-traffic-monitoring-design.md
