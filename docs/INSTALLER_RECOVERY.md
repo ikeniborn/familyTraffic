@@ -75,6 +75,16 @@ sudo familytraffic status
 A recovery is verified only after a new SSH connection, healthy container state, security inspection,
 and unchanged saved identity hashes.
 
+The controlled authentication probe retries connection refusal during container
+startup. It still requires an HTTP 407 response and a fresh matching journal
+event. A listener that is not ready must not cause immediate deployment rollback.
+
+Run the delayed-listener regression without Docker:
+
+```bash
+python3 tests/integration/test_security_probe_startup.py
+```
+
 ## Focused verification
 
 Use existing local application and test-node images. The integration tests create
