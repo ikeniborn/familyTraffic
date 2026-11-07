@@ -503,7 +503,7 @@ _configure_proxy_auth_jail() {
                ! cmp -s "$file" <(_render_proxy_auth_jail 1080,1081,8118,8119 "$log" 5); then
                 echo "Customized managed jail requires review: $file" >&2; return 1
             fi
-        elif [[ "$file" == "$base/jail.d/familytraffic-proxy-auth.local" ]]; then
+        elif [[ "$file" == "$base/jail.d/familytraffic-proxy-auth.local" || "$file" == "$base/jail.d/zz-familytraffic-allowlist.local" ]]; then
             : # Preserve operator overrides; live verification checks effective policy.
         elif grep -Eq '^\[(vless-http|vless-socks5|familytraffic-(proxy-auth|socks5|http)(-notls)?)\]' "$file"; then
             digest=$(sha256sum "$file"); digest="${digest%% *}"
