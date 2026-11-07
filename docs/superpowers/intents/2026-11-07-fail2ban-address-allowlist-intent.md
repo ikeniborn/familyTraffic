@@ -2,6 +2,14 @@
 workflow:
   route: chain
   continuation: execute
+result_check:
+  verdict: needs_work
+  source: intent
+  intent_hash: f8836cd1e0648240
+  last_run: 2026-11-07
+  reviewed: true
+  docs_checked: true
+  pending: PR delivery to test and master
 review:
   intent_hash: f8836cd1e0648240
   last_run: 2026-11-07
