@@ -110,6 +110,7 @@ collect_parameters() {
 
 
     prompt_ssh_source || return 1
+    prompt_fail2ban_allowlist || return 1
 
     # Step 5: Confirm all parameters
     confirm_parameters || {

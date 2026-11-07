@@ -1431,6 +1431,15 @@ deploy_containers() {
         docker compose up -d --no-build || return 1
     fi
 
+    if [[ -n "${FAIL2BAN_ALLOWLIST:-}" ]]; then
+        source "$SCRIPT_DIR_LIB/fail2ban_setup.sh"
+        check_fail2ban_installed || install_fail2ban || return 1
+        configure_sshd_journal_backend || return 1
+        configure_fail2ban_allowlist "$FAIL2BAN_ALLOWLIST" || return 1
+        fail2ban-client -t || return 1
+        reload_fail2ban || return 1
+    fi
+
     # Wait for containers to be healthy
     echo "  Waiting for containers to start..."
     sleep 5

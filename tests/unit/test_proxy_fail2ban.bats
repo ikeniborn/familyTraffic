@@ -183,3 +183,11 @@ PY
     [ "$status" -eq 1 ]
     [ -f "$FT_FAIL2BAN_DIR/jail.d/vless-proxy.conf" ]
 }
+
+@test "installer allowlist survives proxy jail reconciliation" {
+    configure_proxy_auth_jail 1080,8118
+    source "$PROJECT_ROOT/lib/installer_security.sh"
+    configure_fail2ban_allowlist '192.0.2.5'
+    configure_proxy_auth_jail 1080,8118
+    grep -q '192.0.2.5' "$FT_FAIL2BAN_DIR/jail.d/zz-familytraffic-allowlist.local"
+}

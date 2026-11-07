@@ -95,3 +95,9 @@ bats tests/unit/test_installer_security_setup.bats tests/unit/test_pending_proxy
 FT_TEST_IMAGE=familytraffic:proxy-auth-username python3 tests/integration/test_deferred_proxy.py
 FT_UFW_TEST_IMAGE=familytraffic-security-node:local python3 tests/integration/test_installer_firewall.py
 ```
+
+## Fail2ban trusted addresses
+
+The installer accepts space-separated numeric IPv4/IPv6 addresses and CIDRs for SSH and proxy authentication exclusions. Set `FT_FAIL2BAN_ALLOWLIST` for noninteractive input. Empty input preserves existing exclusions. New entries extend each jail's current exclusions; repeated installations preserve them.
+
+The installer stores exclusions in `/etc/fail2ban/jail.d/zz-familytraffic-allowlist.local`. This setting does not grant firewall access. Existing ban thresholds remain unchanged. Invalid addresses are rejected before this file is written.
