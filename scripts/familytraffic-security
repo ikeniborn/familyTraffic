@@ -268,7 +268,7 @@ text=(pathlib.Path(work)/'probe.curl').read_text()
 text=re.sub(r'^proxy-user = .*$',lambda _: 'proxy-user = '+json.dumps(user+':'+uuid.uuid4().hex),text,flags=re.M)
 probe=pathlib.Path(work)/'failure.curl'
 probe.write_text(text);os.chmod(probe,0o600)
-response=subprocess.run(['curl','--config',str(probe),'--noproxy','','--interface','127.0.0.2','--silent','--max-time','5','--output','/dev/null','--write-out','%{http_connect}',target],capture_output=True,text=True)
+response=subprocess.run(['curl','--config',str(probe),'--noproxy','','--interface','127.0.0.2','--silent','--retry','10','--retry-connrefused','--retry-delay','1','--retry-max-time','20','--max-time','5','--output','/dev/null','--write-out','%{http_connect}',target],capture_output=True,text=True)
 if response.stdout!='407':raise SystemExit('Controlled authentication rejection failed')
 deadline=time.monotonic()+2
 while True:
