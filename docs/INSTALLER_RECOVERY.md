@@ -11,10 +11,23 @@ enabling an inactive firewall. It also preserves the current SSH management
 source and port, including when sudo removed `SSH_CONNECTION` from its environment.
 Existing broader permissions remain broader; a new source choice does not remove them.
 
-UFW can skip insertion when a similar rule already exists. The installer checks
-the resulting rule order. If a preceding rule still blocks the requested SSH
-source, installation stops before activating UFW. Review that operator policy
-before retrying. The installer does not reset UFW or delete legacy port rules.
+Empty IPv4 and IPv6 rule lists require no manual preparation. The installer
+places managed SSH permissions before blocking rules. Existing ALLOW,
+DENY, REJECT, LIMIT, and unrelated rules remain
+in place after these SSH permissions. Repeated setup does not add duplicate
+permissions. Existing broader access remains available.
+
+For an active firewall, each affected address family's input chain is replaced
+in one iptables-restore transaction. Output and forwarding chains remain unchanged.
+The installer retains current live rules, including entries added outside UFW.
+It validates both replacements before applying either one. If writing
+or applying rules fails, it restores the saved files and previous live input rules.
+IPv4 and IPv6 replacements are separate transactions with recovery on failure.
+An inactive firewall is enabled only after the resulting SSH permissions pass
+verification. Invalid input or an application failure still stops installation;
+ordinary existing-rule conflicts are resolved automatically.
+
+The installer does not reset or disable UFW or delete legacy port rules.
 
 ```bash
 sudo env FT_SSH_ALLOW_FROM=192.0.2.7 ./install.sh
