@@ -1,4 +1,11 @@
 ---
+result_check:
+  verdict: needs_work
+  source: intent
+  intent_hash: 5c4a91368b867f6c
+  last_run: 2026-11-14
+  reviewed: true
+  docs_checked: true
 workflow:
   route: chain
   continuation: execute

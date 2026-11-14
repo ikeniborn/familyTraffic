@@ -44,8 +44,7 @@ while pid>1:
 PY
 }
 
-# UFW skips an insertion when an identical ALLOW already exists behind a DENY.
-# Refuse activation when the requested source still encounters a blocking rule.
+# Verify the resulting order before enabling an inactive firewall.
 verify_ssh_firewall_rules() {
     /usr/bin/python3 - "$1" "$2" <<'PY'
 import gettext,ipaddress,shutil,sys
@@ -78,28 +77,176 @@ for value in networks:
 PY
 }
 
+# UFW's CLI skips duplicate rules, even when a DENY precedes the ALLOW.
+# Build the complete order first and replace each live input chain atomically.
+reconcile_ssh_firewall_rules() {
+    /usr/bin/python3 - "$1" "$2" "$3" <<'PY'
+import gettext,ipaddress,os,pathlib,shutil,subprocess,sys,tempfile
+from ufw.backend_iptables import UFWBackendIptables
+from ufw.common import UFWRule
+from ufw.util import create_lock,release_lock
+gettext.install('ufw')
+sys.argv[0]=shutil.which('ufw')
+lock=create_lock('/run/ufw.lock')
+try:
+    backend=UFWBackendIptables(False)
+    source,peer,port=sys.argv[1:]
+    requested=[(source,22)]
+    if peer:
+        if not port.isdecimal() or not 1<=int(port)<=65535:
+            raise ValueError('Invalid current SSH port')
+        requested.insert(0,(peer,int(port)))
+    wanted=[]
+    for address,number in requested:
+        networks=[ipaddress.ip_network(address,strict=False)] if address else [ipaddress.ip_network('0.0.0.0/0')]
+        if not address and backend.use_ipv6():
+            networks.append(ipaddress.ip_network('::/0'))
+        for network in networks:
+            if network.version==6 and not backend.use_ipv6():
+                raise ValueError('IPv6 SSH source requires IPv6 support in UFW')
+            rule=UFWRule('allow','tcp',dport=str(number),src=str(network),dst='any')
+            rule.set_v6(network.version==6)
+            rule.normalize()
+            if not any(rule.match(old)==0 for old in wanted):
+                wanted.append(rule)
+    active=backend.is_enabled()
+    backups={}
+    live={}
+    candidates={}
+    def write(path,data):
+        info=path.stat()
+        fd,name=tempfile.mkstemp(dir=path.parent,prefix='.familytraffic-ssh-')
+        try:
+            with os.fdopen(fd,'wb') as stream:
+                os.fchmod(stream.fileno(),info.st_mode)
+                os.fchown(stream.fileno(),info.st_uid,info.st_gid)
+                stream.write(data)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(name,path)
+        finally:
+            if os.path.exists(name): os.unlink(name)
+    def payload(text,v6):
+        chain='ufw6-user-input' if v6 else 'ufw-user-input'
+        lines=[line for line in text.splitlines() if line.startswith('-A '+chain+' ')]
+        return '*filter\n-F '+chain+'\n'+'\n'.join(lines)+'\nCOMMIT\n'
+    def restore(v6,text,test=False):
+        exe=backend.ip6tables_restore if v6 else backend.iptables_restore
+        subprocess.run([exe,'--noflush',*(['--test'] if test else [])],input=text,text=True,check=True,capture_output=True)
+    try:
+        for v6 in sorted({rule.v6 for rule in wanted}):
+            path=pathlib.Path(backend.files['rules6' if v6 else 'rules'])
+            backups[v6]=(path,path.read_bytes())
+            text=backups[v6][1].decode()
+            prefix='ufw6' if v6 else 'ufw'
+            chain=prefix+'-user-input'
+            blocks=[]
+            permissions=[]
+            for rule in wanted:
+                if rule.v6!=v6: continue
+                # Separate managed tuples avoid UFW's duplicate/action matching.
+                marker='FamilyTraffic SSH management'.encode().hex()
+                block='\n### tuple ### allow tcp '+rule.dport+' '+rule.dst+' any '+rule.src+' in comment='+marker+'\n'
+                block+='-A '+chain+' '+rule.format_rule()+'\n'
+                text=text.replace(block,'')
+                blocks.append(block)
+                network=ipaddress.ip_network(rule.src,strict=False)
+                permissions.append('-A '+chain+(' -s '+str(network) if network.prefixlen else '')+' -p tcp -m tcp --dport '+rule.dport+' -j ACCEPT')
+            lines=text.splitlines(keepends=True)
+            position=next((i for i,line in enumerate(lines) if line.startswith(('### RULES ###','### tuple ###','-A ','-I ','COMMIT'))),None)
+            if position is None:
+                raise ValueError('Cannot locate UFW filter rules')
+            updated=(''.join(lines[:position])+''.join(blocks)+''.join(lines[position:])).encode()
+            if active:
+                exe=backend.ip6tables if v6 else backend.iptables
+                current=subprocess.run([exe,'-S',chain],check=True,capture_output=True,text=True).stdout
+                live[v6]=payload(current,v6)
+                remaining=[line for line in current.splitlines() if line.startswith('-A '+chain+' ') and line not in permissions]
+                candidates[v6]=payload('\n'.join(permissions+remaining),v6)
+            if updated!=backups[v6][1]:
+                write(path,updated)
+        if active:
+            for v6 in candidates:
+                restore(v6,candidates[v6],test=True)
+            for v6 in candidates:
+                if candidates[v6]!=live[v6]:
+                    restore(v6,candidates[v6])
+    except Exception:
+        failures=[]
+        for path,data in backups.values():
+            try: write(path,data)
+            except Exception as error: failures.append(str(error))
+        for v6,text in live.items():
+            try: restore(v6,text)
+            except Exception as error: failures.append(str(error))
+        if failures:
+            print('UFW recovery failed: '+'; '.join(failures),file=sys.stderr)
+        raise
+except Exception as error:
+    print('Cannot reconcile SSH firewall rules: '+str(error),file=sys.stderr)
+    sys.exit(1)
+finally:
+    release_lock(lock)
+PY
+}
+
+# Native activation rewrites user.rules while preparing logging. Retain raw rules.
+enable_install_firewall() {
+    /usr/bin/python3 - <<'PY'
+import gettext,os,pathlib,shutil,sys,tempfile
+from ufw.frontend import UFWFrontend
+from ufw.util import create_lock,release_lock
+gettext.install('ufw')
+sys.argv[0]=shutil.which('ufw')
+lock=create_lock('/run/ufw.lock')
+try:
+    frontend=UFWFrontend(False)
+    saved={pathlib.Path(frontend.backend.files[key]):pathlib.Path(frontend.backend.files[key]).read_bytes() for key in ('rules','rules6')}
+    try:
+        frontend.set_enabled(True)
+    finally:
+        failures=[]
+        for path,data in saved.items():
+            name=None
+            try:
+                info=path.stat()
+                fd,name=tempfile.mkstemp(dir=path.parent,prefix='.familytraffic-ssh-')
+                with os.fdopen(fd,'wb') as stream:
+                    os.fchmod(stream.fileno(),info.st_mode)
+                    os.fchown(stream.fileno(),info.st_uid,info.st_gid)
+                    stream.write(data)
+                    stream.flush()
+                    os.fsync(stream.fileno())
+                os.replace(name,path)
+            except Exception as error:
+                failures.append(str(error))
+            finally:
+                if name and os.path.exists(name): os.unlink(name)
+        if failures:
+            raise RuntimeError('UFW activation file recovery failed: '+'; '.join(failures))
+finally:
+    release_lock(lock)
+PY
+}
+
 # Add access before enabling UFW. Never reset policy or remove existing rules.
 configure_install_firewall() {
     local source="${1-}" peer peer_port status connection
     validate_ssh_source "$source" || { echo 'Invalid SSH source address' >&2; return 1; }
     connection="${SSH_CONNECTION:-$(current_ssh_connection)}" || return 1
-    if [[ -n "$source" ]]; then
-        ufw insert 1 allow from "$source" to any port 22 proto tcp || return 1
-    else
-        ufw insert 1 allow 22/tcp || return 1
-    fi
     if [[ -n "$connection" ]]; then
         read -r peer _ _ peer_port <<< "$connection"
         validate_ssh_source "$peer" || return 1
         [[ "$peer_port" =~ ^[0-9]+$ ]] || return 1
-        # Retain the active management path even when a different source is selected.
-        ufw insert 1 allow from "$peer" to any port "$peer_port" proto tcp || return 1
+    fi
+    reconcile_ssh_firewall_rules "$source" "${peer:-}" "${peer_port:-}" || return 1
+    if [[ -n "$connection" ]]; then
         verify_ssh_firewall_rules "$peer" "$peer_port" || return 1
     fi
     verify_ssh_firewall_rules "$source" 22 || return 1
     status=$(LC_ALL=C ufw status) || return 1
     if ! grep -q '^Status: active$' <<< "$status"; then
-        ufw --force enable || return 1
+        enable_install_firewall || return 1
     fi
     LC_ALL=C ufw status | grep -q '^Status: active$'
 }

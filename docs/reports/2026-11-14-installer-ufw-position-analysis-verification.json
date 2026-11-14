@@ -1,0 +1,50 @@
+{
+  "topic": "installer-ufw-position-analysis",
+  "workflow": "chain/execute",
+  "base": "origin/test",
+  "code_sha256": {
+    "lib/installer_security.sh": "0626c5a911c311bb4628442746de8b0c0c475db3c63c298fe54cb94d09eae1af",
+    "tests/integration/test_installer_firewall.py": "0ac94d110f7935e57ccf5ff2f4c06ee24f9430ddd6e20c0f98568c726e17ad9e",
+    "tests/unit/test_installer_security_setup.bats": "61eb78421b04f2e3e74012bde915f8a66cfe5ff9a56744d7474d961300d71f47"
+  },
+  "checks": [
+    {
+      "command": "bats --print-output-on-failure tests/unit/",
+      "scope": "complete unit suite",
+      "exit_code": 0,
+      "tests": 166,
+      "passed": 164,
+      "skipped": 2
+    },
+    {
+      "command": "FT_UFW_TEST_IMAGE=familytraffic-security-node:local python3 tests/integration/test_installer_firewall.py",
+      "scope": "isolated real UFW acceptance and recovery",
+      "exit_code": 0,
+      "tests": 15
+    },
+    {
+      "command": "bash -n lib/installer_security.sh",
+      "exit_code": 0
+    },
+    {
+      "command": "./tests/lint.sh",
+      "exit_code": 0,
+      "findings": 189,
+      "errors": 0,
+      "baseline": "unchanged"
+    },
+    {
+      "command": "git diff --check",
+      "exit_code": 0
+    }
+  ],
+  "review": "Independent security reviewer: no remaining important issues",
+  "host_changes": false,
+  "ufw_version": "0.36.2",
+  "test_image": "sha256:01ee219590eef6b607816860c84506e62ba658f0a72537d89f0c1d2813ec6f55",
+  "limits": [
+    "IPv4 and IPv6 apply as separate transactions with rollback.",
+    "No live host application or new-SSH verification claimed."
+  ],
+  "result": "Implementation verified; PR deliveries into test and master remain pending."
+}
