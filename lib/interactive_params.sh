@@ -66,6 +66,84 @@ PREDEFINED_DESTINATIONS=(
 # Returns: 0 on success, 1 on failure or user cancellation
 # v5.1: VLESS_PORT hardcoded to 8443 (nginx architecture requirement)
 # =============================================================================
+source "$(dirname "${BASH_SOURCE[0]}")/service_modes.sh"
+
+prompt_service_port() {
+    local name=$1 label=$2 default_port=$3 answer
+    read -rp "$label port [$default_port]: " answer || return 1
+    printf -v "$name" '%s' "${answer:-$default_port}"
+}
+
+select_service_mode() {
+    local answer default_https=8118
+    echo "1) VPN only (default)   2) Proxy only   3) VPN and proxy"
+    read -rp "Services [1]: " answer || return 1
+    case "${answer:-1}" in
+        1) FT_SERVICE_MODE=vpn ;;
+        2) FT_SERVICE_MODE=proxy; default_https=443 ;;
+        3) FT_SERVICE_MODE=both ;;
+        *) echo 'Unknown service mode' >&2; return 1 ;;
+    esac
+    FT_VLESS_PUBLIC_PORT='' FT_HTTPS_PROXY_PORT='' FT_SOCKS_TLS_PORT=''
+    FT_HTTP_PLAIN_PORT='' FT_SOCKS_PLAIN_PORT=''
+    ENABLE_PROXY=false ENABLE_PUBLIC_PROXY=false ENABLE_PROXY_TLS=false PROXY_NOTLS_ENABLED=false
+    if [[ $FT_SERVICE_MODE != proxy ]]; then
+        prompt_service_port FT_VLESS_PUBLIC_PORT VLESS 443 || return 1
+    fi
+    if [[ $FT_SERVICE_MODE != vpn ]]; then
+        ENABLE_PROXY=true ENABLE_PUBLIC_PROXY=true ENABLE_PROXY_TLS=true
+        prompt_service_port FT_HTTPS_PROXY_PORT HTTPS "$default_https" || return 1
+        read -rp "Enable SOCKS5 over TLS? [y/N]: " answer || return 1
+        case "${answer,,}" in
+            y|yes) prompt_service_port FT_SOCKS_TLS_PORT SOCKS5S 1080 || return 1 ;;
+            n|no|'') ;;
+            *) echo 'Expected yes or no' >&2; return 1 ;;
+        esac
+        read -rp "Also enable plaintext proxy ports (credentials travel in cleartext)? [y/N]: " answer || return 1
+        case "${answer,,}" in
+            y|yes)
+                PROXY_NOTLS_ENABLED=true
+                prompt_service_port FT_HTTP_PLAIN_PORT HTTP 8119 || return 1
+                if [[ -n $FT_SOCKS_TLS_PORT ]]; then
+                    prompt_service_port FT_SOCKS_PLAIN_PORT SOCKS5 1081 || return 1
+                fi ;;
+            n|no|'') ;;
+            *) echo 'Expected yes or no' >&2; return 1 ;;
+        esac
+    fi
+    export FT_SERVICE_MODE FT_VLESS_PUBLIC_PORT FT_HTTPS_PROXY_PORT FT_SOCKS_TLS_PORT FT_HTTP_PLAIN_PORT FT_SOCKS_PLAIN_PORT
+    validate_service_settings
+}
+
+check_selected_ports() {
+    local port sockets ssh_connection=${SSH_CONNECTION-}
+    if [[ -z $ssh_connection ]] && declare -F current_ssh_connection >/dev/null; then
+        ssh_connection=$(current_ssh_connection) || return 1
+    fi
+    sockets=$(ss -H -ltn) || return 1
+    for port in "$FT_VLESS_PUBLIC_PORT" "$FT_HTTPS_PROXY_PORT" "$FT_SOCKS_TLS_PORT" "$FT_HTTP_PLAIN_PORT" "$FT_SOCKS_PLAIN_PORT"; do
+        [[ -n $port ]] || continue
+        case "$port" in
+            22|80|844[3-6]|8448|10800|18118|10085|"${ssh_connection##* }")
+                echo "Port $port is reserved for management or an internal service" >&2; return 1 ;;
+        esac
+        if awk -v port="$port" '$4 ~ (":" port "$") { found=1 } END { exit !found }' <<< "$sockets"; then
+            echo "Port $port is in use" >&2
+            return 1
+        fi
+    done
+    local required=()
+    [[ -z $FT_VLESS_PUBLIC_PORT ]] || required+=(8443)
+    [[ -z $FT_HTTPS_PROXY_PORT ]] || required+=(80 18118)
+    [[ -z $FT_SOCKS_TLS_PORT ]] || required+=(10800)
+    for port in "${required[@]}"; do
+        if awk -v port="$port" '$4 ~ (":" port "$") {found=1} END {exit !found}' <<< "$sockets"; then
+            echo "Required service port $port is in use" >&2
+            return 1
+        fi
+    done
+}
+
 collect_parameters() {
     echo ""
     echo -e "${BLUE}╔══════════════════════════════════════════════════════════════╗${NC}"
@@ -76,29 +154,11 @@ collect_parameters() {
     echo -e "${CYAN}Press Ctrl+C at any time to cancel.${NC}"
     echo ""
 
-    # v5.1: Hardcode VLESS port to 8443 (nginx architecture requirement)
-    # nginx listens on external port 443 and forwards to Xray internal port 8443
-    VLESS_PORT="$DEFAULT_VLESS_PORT"
-    echo -e "${CYAN}Xray internal port: ${VLESS_PORT} (hardcoded for nginx architecture)${NC}"
-    echo ""
-
-    # Step 1: Select destination site
-    select_destination_site || {
-        echo -e "${RED}Failed to select destination site${NC}" >&2
-        return 1
-    }
-
-    # Step 2: Select Docker subnet
-    select_docker_subnet || {
-        echo -e "${RED}Failed to select Docker subnet${NC}" >&2
-        return 1
-    }
-
-    # Step 3: Enable public proxy support (v3.2)
-    prompt_enable_public_proxy || {
-        echo -e "${RED}Failed to configure proxy settings${NC}" >&2
-        return 1
-    }
+    if [[ $FT_SERVICE_MODE != proxy ]]; then
+        VLESS_PORT="$DEFAULT_VLESS_PORT"
+        select_destination_site || return 1
+    fi
+    select_docker_subnet || return 1
 
     # Step 4: Prompt for domain and email (v3.4) - only if public proxy + TLS enabled
     if [[ "$ENABLE_PUBLIC_PROXY" == "true" ]] && [[ "$ENABLE_PROXY_TLS" == "true" ]]; then
@@ -565,37 +625,14 @@ confirm_parameters() {
     echo ""
     echo -e "${CYAN}Please review your configuration:${NC}"
     echo ""
-    echo -e "  ${YELLOW}Destination Site:${NC}    ${REALITY_DEST}:${REALITY_DEST_PORT}"
-    echo -e "  ${YELLOW}Xray Internal Port:${NC}  ${VLESS_PORT} (nginx forwards from 443)"
-    echo -e "  ${YELLOW}Docker Subnet:${NC}       ${DOCKER_SUBNET}"
-    echo -e "  ${YELLOW}SSH port 22 source:${NC}  ${SSH_ALLOW_FROM:-Any address} (existing rules preserved)"
-
-    # v3.4: Display proxy mode with TLS status
-    if [[ "$ENABLE_PUBLIC_PROXY" == "true" ]]; then
-        if [[ "$ENABLE_PROXY_TLS" == "true" ]]; then
-            echo -e "  ${YELLOW}Proxy Mode:${NC}          ${GREEN}Public (TLS encrypted)${NC}"
-            echo -e "  ${YELLOW}⚠️  Ports 1080, 8118 exposed (socks5s://, https://)${NC}"
-            # v3.3: Display domain and email if set
-            if [[ -n "$DOMAIN" ]]; then
-                echo -e "  ${YELLOW}TLS Domain:${NC}          ${DOMAIN}"
-            fi
-            if [[ -n "$EMAIL" ]]; then
-                echo -e "  ${YELLOW}TLS Email:${NC}           ${EMAIL}"
-            fi
-        else
-            echo -e "  ${YELLOW}Proxy Mode:${NC}          ${RED}Public (PLAINTEXT)${NC}"
-            echo -e "  ${YELLOW}⚠️  Ports 1080, 8118 exposed (socks5://, http://)${NC}"
-            echo -e "  ${RED}⚠️  WARNING: Credentials NOT encrypted!${NC}"
-        fi
-        if [[ "$PROXY_NOTLS_ENABLED" == "true" ]]; then
-            echo -e "  ${YELLOW}No-TLS Ports:${NC}        ${RED}1081 (SOCKS5), 8119 (HTTP) — cleartext!${NC}"
-        fi
-    elif [[ "$ENABLE_PROXY" == "true" ]]; then
-        echo -e "  ${YELLOW}Proxy Mode:${NC}          ${GREEN}Enabled (localhost only)${NC}"
-    else
-        echo -e "  ${YELLOW}Proxy Mode:${NC}          ${YELLOW}VLESS-ONLY MODE${NC}"
-    fi
-
+    echo "  Selected services: $FT_SERVICE_MODE"
+    [[ -z $FT_VLESS_PUBLIC_PORT ]] || echo "  VLESS: $FT_VLESS_PUBLIC_PORT (Reality destination $REALITY_DEST)"
+    [[ -z $FT_HTTPS_PROXY_PORT ]] || echo "  HTTPS: $DOMAIN:$FT_HTTPS_PROXY_PORT"
+    [[ -z $FT_SOCKS_TLS_PORT ]] || echo "  SOCKS5 over TLS: $FT_SOCKS_TLS_PORT"
+    [[ -z $FT_HTTP_PLAIN_PORT ]] || echo "  Plaintext HTTP: $FT_HTTP_PLAIN_PORT"
+    [[ -z $FT_SOCKS_PLAIN_PORT ]] || echo "  Plaintext SOCKS5: $FT_SOCKS_PLAIN_PORT"
+    echo "  Docker subnet: $DOCKER_SUBNET"
+    echo "  SSH port 22 source: ${SSH_ALLOW_FROM:-Any address} (existing rules preserved)"
 
     # v5.32: Display DNS configuration (3 servers)
     if [[ -n "${DETECTED_DNS_PRIMARY}" ]]; then
@@ -1189,7 +1226,7 @@ prompt_dns_selection() {
 
     # Sort DNS results by response time
     local sorted_dns=()
-    while IFS= read -r line; do
+    while IFS='' read -r line; do
         sorted_dns+=("$line")
     done < <(for dns_ip in "${!DNS_TEST_RESULTS[@]}"; do
         local result="${DNS_TEST_RESULTS[$dns_ip]}"

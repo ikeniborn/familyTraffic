@@ -53,3 +53,17 @@ func TestStatsAPIRequestsAreNotUserAccess(t *testing.T) {
 		t.Fatalf("admin API counted as user access: %v %v", events, err)
 	}
 }
+
+func TestSelectedListener(t *testing.T) {
+	for _, tc := range []struct{ line, want string }{
+		{`{"listener":"443","service":"https"}`, "https"},
+		{`{"listener":"9440","service":"https"}`, "https"},
+		{`{"listener":"443"}`, "vless-front"},
+		{`{"listener":"443","service":"unknown"}`, ""},
+	} {
+		e, err := Parse("nginx", tc.line, time.Now())
+		if err != nil || (tc.want == "" && len(e) != 0) || (tc.want != "" && (len(e) == 0 || e[0].Labels["listener"] != tc.want)) {
+			t.Fatalf("%s: events=%v error=%v", tc.line, e, err)
+		}
+	}
+}

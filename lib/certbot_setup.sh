@@ -263,59 +263,19 @@ obtain_certificate() {
 }
 
 #==============================================================================
-# FUNCTION: setup_renewal_cron
-# PURPOSE: Setup cron job for automatic certificate renewal
-# USAGE: setup_renewal_cron
-# RETURNS: 0 on success, 1 on failure
-#==============================================================================
-setup_renewal_cron() {
-    local cron_file="/etc/cron.d/certbot-familytraffic-renew"
-
-    echo ""
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo "Auto-Renewal Cron Job Setup"
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo ""
-
-    # Create cron job file
-    cat > "$cron_file" <<'EOF'
-# Auto-renewal for VLESS Let's Encrypt certificates
-# Runs twice daily at midnight and noon (UTC)
-# Certbot checks if renewal is needed (< 30 days until expiry)
-# Deploy hook restarts Xray after successful renewal
-
-SHELL=/bin/bash
-PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
-
-# Twice daily renewal check (v5.33: deploy-hook sends SIGHUP to nginx via supervisorctl)
-0 0,12 * * * root certbot renew --quiet --deploy-hook "docker exec familytraffic supervisorctl -c /etc/familytraffic/supervisord.conf signal SIGHUP nginx" >> /opt/familytraffic/logs/certbot-renew.log 2>&1
-EOF
-
-    # Set correct permissions
-    chmod 644 "$cron_file"
-
-    echo -e "${GREEN}✅ Cron job created successfully${NC}"
-    echo ""
-    echo "Cron file: $cron_file"
-    echo "Schedule:  Twice daily (00:00 and 12:00 UTC)"
-    echo "Command:   certbot renew --quiet --deploy-hook '/usr/local/bin/familytraffic-cert-renew'"
-    echo "Log file:  /opt/familytraffic/logs/certbot-renew.log"
-    echo ""
-    echo "RENEWAL BEHAVIOR:"
-    echo "  - Certbot checks twice daily if renewal needed"
-    echo "  - Renewal triggered when < 30 days until expiry"
-    echo "  - Deploy hook restarts Xray after successful renewal"
-    echo "  - Email notifications sent to registered email on failures"
-    echo ""
-    echo "MANUAL OPERATIONS:"
-    echo "  - Dry-run test: sudo certbot renew --dry-run"
-    echo "  - Force renewal: sudo certbot renew --force-renewal"
-    echo "  - Check logs:    cat /opt/familytraffic/logs/certbot-renew.log"
-    echo ""
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo ""
-
-    return 0
+# Verify the saved per-certificate hooks before enabling the distribution timer.
+# An existing certificate can be retained by Certbot without saving new options.
+enable_host_certificate_renewal() {
+    local profile="/etc/letsencrypt/renewal/$1.conf" hook=/usr/local/lib/familytraffic/acme-hook
+    local action pair
+    for pair in pre_hook:open post_hook:close renew_hook:reload; do
+        action=${pair#*:}
+        if ! grep -Fxq "${pair%:*} = $hook $action" "$profile"; then
+            echo "Certificate renewal profile $profile lacks the managed $action hook." >&2
+            return 1
+        fi
+    done
+    systemctl enable --now certbot.timer
 }
 
 #==============================================================================

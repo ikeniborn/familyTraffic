@@ -14,7 +14,20 @@ VLESS + Reality — самодостаточный VPN-сервер с защи�
 
 ---
 
+## Fresh installation modes
+
+| Selection | VLESS Reality | HTTPS proxy | SOCKS5 over TLS |
+|---|---|---|---|
+| VPN only (default) | 443 | Disabled | Disabled |
+| Proxy only | Disabled | 443 | Optional, 1080 |
+| VPN and proxy | 443 | 8118 | Optional, 1080 |
+
+Press Enter to accept an offered port. Each selected public service can use a different available TCP port.
+Proxy installations need a domain pointing to the server and a certificate. The site for visitors without credentials is a proposed second stage.
+
 ## Архитектура
+
+The diagram shows combined mode with default ports and optional services enabled.
 
 ```
 Client
@@ -41,7 +54,7 @@ Client
 |---|---|---|
 | xray | 1 | VLESS Reality, Tier 2, SOCKS5, HTTP proxy |
 | nginx | 2 | SNI routing (443), TLS termination, cloak-port (4443) |
-| certbot-cron | 3 | Авторенew Let's Encrypt каждые 12 часов |
+| certbot-cron | 3 | Legacy installations only. Fresh TLS proxy installations use the host Certbot timer. |
 | mtg | 4 | MTProxy (Fake TLS, порт 2053) — `autostart=true` если включён при установке или `mtproxy setup` |
 
 ---

@@ -476,6 +476,10 @@ ROTATION
 }
 
 _proxy_auth_port_set() {
+    if [[ -n ${FT_SERVICE_MODE:-} ]]; then
+        [[ -n $1 && $1 == "$(proxy_auth_ports "${PROXY_NOTLS_ENABLED:-false}")" ]]
+        return
+    fi
     [[ "$1" == 1080,8118 || "$1" == 1080,1081,8118,8119 ]]
 }
 
@@ -497,7 +501,9 @@ _configure_proxy_auth_jail() {
         [[ -f "$file" ]] || continue
         [[ ! -L "$file" ]] || { echo "Refusing symlinked jail: $file" >&2; return 1; }
         if [[ "$file" == "$jail" ]]; then
-            if ! cmp -s "$file" <(_render_proxy_auth_jail 1080,8118 "$log") &&
+            if ! cmp -s "$file" <(_render_proxy_auth_jail "$ports" "$log") &&
+               ! cmp -s "$file" <(_render_proxy_auth_jail "${SECURITY_PREVIOUS_PORTS:-$ports}" "$log") &&
+               ! cmp -s "$file" <(_render_proxy_auth_jail 1080,8118 "$log") &&
                ! cmp -s "$file" <(_render_proxy_auth_jail 1080,1081,8118,8119 "$log") &&
                ! cmp -s "$file" <(_render_proxy_auth_jail 1080,8118 "$log" 5) &&
                ! cmp -s "$file" <(_render_proxy_auth_jail 1080,1081,8118,8119 "$log" 5); then

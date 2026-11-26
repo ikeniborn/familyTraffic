@@ -6,6 +6,9 @@ security_reset_transaction() {
     SECURITY_BACKUP_READY=false
     SECURITY_STOPPED=false
     SECURITY_POLICY_STARTED=false
+    SECURITY_REMOVED_PORTS=""
+    SECURITY_PREVIOUS_PORTS=""
+    unset SECURITY_PREVIOUS_HTTP SECURITY_PREVIOUS_SOCKS
     SECURITY_LOG_MISSING=false
     SECURITY_KEEP_BACKUP=false
     SECURITY_BACKUP_PATHS=()
@@ -25,42 +28,81 @@ security_paths() {
     SECURITY_OVERRIDE="$SECURITY_ROOT/docker-compose.security.yml"
     SECURITY_LOG="${FT_PROXY_AUTH_LOG:-$SECURITY_ROOT/logs/xray/auth.log}"
     export FT_PROXY_AUTH_LOG="$SECURITY_LOG"
+    source "$SECURITY_LIB/service_modes.sh"
     source "$SECURITY_LIB/proxy_security.sh"
     source "$SECURITY_LIB/fail2ban_setup.sh"
 }
 
+security_select_plaintext() {
+    local desired=$1
+    [[ $FT_SERVICE_MODE != vpn ]] || { echo 'Public proxy is disabled' >&2; return 1; }
+    SECURITY_PREVIOUS_PORTS=$(proxy_auth_ports false) || return 1
+    export SECURITY_PREVIOUS_HTTP=$FT_HTTP_PLAIN_PORT SECURITY_PREVIOUS_SOCKS=$FT_SOCKS_PLAIN_PORT
+    SECURITY_REMOVED_PORTS=""
+    if [[ -z $FT_HTTPS_PROXY_PORT ]]; then
+        # Plaintext-only installations have no alternative transport.
+        return 0
+    fi
+    case "$desired" in
+        true)
+            FT_HTTP_PLAIN_PORT=${FT_HTTP_PLAIN_PORT:-8119}
+            if [[ -n $FT_SOCKS_TLS_PORT ]]; then FT_SOCKS_PLAIN_PORT=${FT_SOCKS_PLAIN_PORT:-1081}; fi ;;
+        false)
+            SECURITY_REMOVED_PORTS="${FT_HTTP_PLAIN_PORT} ${FT_SOCKS_PLAIN_PORT}"
+            FT_HTTP_PLAIN_PORT='' FT_SOCKS_PLAIN_PORT='' ;;
+        *) return 1 ;;
+    esac
+    validate_service_settings
+}
+
 security_stage_nginx() {
     python3 - "$1" "$2" "$3" <<'PY'
-import pathlib,re,sys
+import os,pathlib,re,sys
 source,target,notls=sys.argv[1:]
 text=pathlib.Path(source).read_text()
 if re.search(r'listen\s+[^;]*\bproxy_protocol\b',text):
     raise SystemExit('Public incoming PROXY protocol requires operator review')
 pattern=re.compile(r'^    server \{\n.*?^    \}',re.M|re.S)
+fields = {
+    'FT_HTTPS_PROXY_PORT': ('8118', '18118', True),
+    'FT_SOCKS_TLS_PORT': ('1080', '10800', True),
+    'FT_HTTP_PLAIN_PORT': ('8119', '18118', False),
+    'FT_SOCKS_PLAIN_PORT': ('1081', '10800', False),
+}
+endpoints = {}
+for key, (default, backend, tls) in fields.items():
+    port = os.environ.get(key, default)
+    if port:
+        endpoints[port] = (backend, tls)
+removed = {os.environ.get('SECURITY_PREVIOUS_HTTP'): '18118', os.environ.get('SECURITY_PREVIOUS_SOCKS'): '10800'}
 seen=set()
 def update(match):
     block=match.group()
     remote=re.search(r'proxy_pass\s+127\.0\.0\.1:(10800|18118)\s*;',block)
     if not remote:return block
     listen=re.findall(r'\blisten\s+(\d+)(?:\s+ssl)?\s*;',block)
-    if len(listen)!=1 or listen[0] not in ('1080','1081','8118','8119'):
+    if len(listen)==1 and listen[0] not in endpoints and removed.get(listen[0])==remote[1] and notls=='false':
+        return ''
+    if len(listen)!=1 or listen[0] not in endpoints:
         raise SystemExit('Ambiguous proxy listener requires operator review')
     port=listen[0]
     if port in seen:raise SystemExit('Duplicate proxy listener')
     seen.add(port)
-    expected='10800' if port in ('1080','1081') else '18118'
+    expected,tls=endpoints[port]
+    if tls != bool(re.search(r'\blisten\s+\d+\s+ssl;',block)):raise SystemExit('Unexpected proxy TLS setting')
     if remote[1]!=expected:raise SystemExit('Unexpected proxy target')
     directives=re.findall(r'\bproxy_protocol\s+([^;]+);',block)
     if directives and directives!=['on']:raise SystemExit('Conflicting PROXY directive')
-    if port in ('1081','8119') and notls=='false':return ''
+    if not tls and notls=='false' and os.environ.get('FT_HTTPS_PROXY_PORT', '8118'):return ''
     if not directives:
         block=block[:remote.end()]+ '\n        proxy_protocol on;' +block[remote.end():]
     return block
 text=pattern.sub(update,text)
-if not {'1080','8118'}<=seen:raise SystemExit('Require recognized TLS proxy listeners')
+if not {p for p,(_,tls) in endpoints.items() if tls}<=seen:raise SystemExit('Require recognized TLS proxy listeners')
 if notls=='true':
     extra=''
-    for port,remote in [('1081','10800'),('8119','18118')]:
+    for port,(remote,tls) in endpoints.items():
+        if tls:continue
         if port not in seen:
             extra+=f'\n    server {{\n        listen {port};\n        proxy_pass 127.0.0.1:{remote};\n        proxy_protocol on;\n        proxy_connect_timeout 10s;\n        proxy_timeout 300s;\n    }}\n'
     # Insert before the top-level stream block ends. Generated proxy blocks are flat.
@@ -74,6 +116,19 @@ if notls=='true':
             if depth==0:break
     if depth:raise SystemExit('Unclosed stream block')
     text=text[:end]+extra+text[end:]
+if "map $server_port $traffic_service {" in text:
+    entries = []
+    vpn = os.environ.get("FT_VLESS_PUBLIC_PORT", "443")
+    if vpn: entries.append((vpn, "vless-front"))
+    for port, (backend, tls) in endpoints.items():
+        if tls or notls == "true" or not os.environ.get("FT_HTTPS_PROXY_PORT", "8118"):
+            label = ("https" if tls else "http") if backend == "18118" else ("socks5s" if tls else "socks5")
+            entries.append((port, label))
+    # Keep the generator's order so a second reconciliation is byte-stable.
+    order = ["vless-front", "https", "socks5s", "http", "socks5"]
+    rows = "".join(f"        {port} {label};\n" for port, label in sorted(entries, key=lambda row: order.index(row[1])))
+    text = re.sub(r"(    map \$server_port \$traffic_service \{\n        default unknown;\n).*?(    \})",
+                  lambda match: match[1] + rows + match[2], text, flags=re.S)
 pathlib.Path(target).write_text(text)
 PY
 }
@@ -121,6 +176,7 @@ security_preflight() {
     for command in "$SECURITY_XRAY" "$SECURITY_NGINX" "$SECURITY_USERS" "$SECURITY_ROOT/docker-compose.yml" "$SECURITY_ROOT/.env"; do
         [[ -f "$command" && ! -L "$command" ]] || { echo "Missing or symlinked deployment file: $command" >&2; return 1; }
     done
+    load_service_settings "$SECURITY_ROOT" || return 1
     SECURITY_IMAGE=$(docker image inspect --format '{{.Id}}' "$image") || return 1
     [[ "$SECURITY_IMAGE" =~ ^sha256:[a-f0-9]{64}$ ]] || return 1
     if SECURITY_OLD_IMAGE=$(docker inspect --format '{{.Image}}' familytraffic 2>/dev/null); then
@@ -131,6 +187,7 @@ security_preflight() {
     fi
     [[ "$SECURITY_OLD_IMAGE" =~ ^sha256:[a-f0-9]{64}$ ]] || return 1
     SECURITY_NOTLS=$(resolve_proxy_notls "${PROXY_NOTLS_ENABLED-}" "$SECURITY_ROOT/.env") || return 1
+    security_select_plaintext "$SECURITY_NOTLS" || return 1
     SECURITY_PORTS=$(proxy_auth_ports "$SECURITY_NOTLS") || return 1
     validate_proxy_auth_config "$SECURITY_XRAY" || return 1
     SECURITY_USER_HASH=$(security_user_fingerprint) || return 1
@@ -138,6 +195,18 @@ security_preflight() {
     validate_saved_proxy_accounts "$SECURITY_XRAY" "$SECURITY_USERS" || { echo 'Saved users and proxy accounts disagree; synchronize accounts before reconciliation' >&2; return 1; }
     validate_proxy_firewall "$SECURITY_NOTLS" || return 1
     SECURITY_FIREWALL_CHANGES=$(_proxy_firewall_changes "$SECURITY_NOTLS") || return 1
+    local retired rules
+    rules=$(LC_ALL=C ufw status numbered) || return 1
+    for retired in $SECURITY_REMOVED_PORTS; do
+        if grep -Eq "^\[[[:space:]]*[0-9]+\][[:space:]]+${retired}/tcp( |$)" <<< "$rules"; then
+            if grep -E "^\[[[:space:]]*[0-9]+\][[:space:]]+${retired}/tcp( |$)" <<< "$rules" |
+                    grep -Ev 'ALLOW IN +Anywhere( \(v6\))? +# (FamilyTraffic proxy auth|familyTraffic authenticated proxy|familyTraffic HTTP proxy no-TLS)$' >/dev/null; then
+                echo "Port $retired has a custom UFW rule; preserving operator policy" >&2
+                return 1
+            fi
+            SECURITY_FIREWALL_CHANGES+="${SECURITY_FIREWALL_CHANGES:+$'\n'}$retired"
+        fi
+    done
     SECURITY_WORK=$(mktemp -d) || return 1
     chmod 700 "$SECURITY_WORK" || return 1
     (umask 077; stage_proxy_security_config "$SECURITY_XRAY" "$SECURITY_WORK/xray.json") || return 1
@@ -178,7 +247,7 @@ security_backup() {
     LC_ALL=C ufw status numbered > "$SECURITY_WORK/ufw.before" || return 1
     # Keep exact old project rule commands, without copying the whole host ruleset.
     : > "$SECURITY_WORK/firewall.restore"
-    while IFS= read -r port; do
+    while IFS='' read -r port; do
         [[ -n "$port" ]] || continue
         state=$(sed -nE "s/^\\[[[:space:]]*[0-9]+\\][[:space:]]*${port}\/tcp[[:space:]]+(ALLOW|LIMIT)[[:space:]]+IN[[:space:]]+Anywhere[[:space:]]+# (.*)$/\\1|\\2/p" "$SECURITY_WORK/ufw.before" | head -1)
         printf '%s|%s\n' "$port" "$state" >> "$SECURITY_WORK/firewall.restore"
@@ -204,13 +273,16 @@ security_apply() {
     cat "$SECURITY_WORK/xray.json" > "$SECURITY_XRAY" || return 1
     cat "$SECURITY_WORK/nginx.conf" > "$SECURITY_NGINX" || return 1
     python3 - "$SECURITY_ROOT/.env" "$SECURITY_NOTLS" <<'PY' || return 1
-import pathlib,sys
+import os,pathlib,sys
 path=pathlib.Path(sys.argv[1]);value=sys.argv[2]
 lines=path.read_text().splitlines(keepends=True)
 result=[];written=False
 for line in lines:
     if line.startswith('PROXY_NOTLS_ENABLED='):
         if not written:result.append('PROXY_NOTLS_ENABLED='+value+'\n');written=True
+    elif os.environ.get('FT_LEGACY_SERVICE_SETTINGS')=='false' and line.partition('=')[0] in ('FT_HTTP_PLAIN_PORT','FT_SOCKS_PLAIN_PORT'):
+        key=line.partition('=')[0]
+        result.append(key+'='+os.environ[key]+'\n')
     else:result.append(line)
 if not written:
     if result and not result[-1].endswith('\n'):result[-1]+='\n'
@@ -230,17 +302,20 @@ security_compose_with_old() {
 security_verify_traffic() {
     local domain
     domain=$(sed -nE 's/^DOMAIN=([A-Za-z0-9.-]+)$/\1/p' "$SECURITY_ROOT/.env")
+    if [[ -z ${FT_HTTPS_PROXY_PORT-8118} ]]; then domain=127.0.0.1; fi
     [[ -n "$domain" && "$domain" != *$'\n'* ]] || return 1
     # Keep credentials in a private curl config, outside argv and diagnostic output.
-    python3 - "$SECURITY_XRAY" "$SECURITY_WORK/probe.curl" "$domain" <<'PY' || return 1
+    python3 - "$SECURITY_XRAY" "$SECURITY_WORK/probe.curl" "$domain" "${FT_HTTPS_PROXY_PORT-8118}" "${FT_HTTP_PLAIN_PORT-}" <<'PY' || return 1
 import json,os,sys
 config=json.load(open(sys.argv[1]))
+port=sys.argv[4] or sys.argv[5]
+scheme='https' if sys.argv[4] else 'http'
 account=next(i for i in config['inbounds'] if i['tag']=='http-proxy')['settings']['accounts'][0]
 def quote(value):return json.dumps(value,ensure_ascii=False)
 with open(sys.argv[2],'w') as out:
-    out.write('proxy = '+quote('https://'+sys.argv[3]+':8118')+'\n')
+    out.write('proxy = '+quote(scheme+'://'+sys.argv[3]+':'+port)+'\n')
     out.write('proxy-user = '+quote(account['user']+':'+account['pass'])+'\n')
-    out.write('resolve = '+quote(sys.argv[3]+':8118:127.0.0.1')+'\n')
+    out.write('resolve = '+quote(sys.argv[3]+':'+port+':127.0.0.1')+'\n')
 os.chmod(sys.argv[2],0o600)
 PY
     if proxy_config_is_pending "$SECURITY_XRAY"; then
@@ -297,6 +372,12 @@ sys.exit(0 if len(cover)==1 and cover[0]["Destination"]=="/var/log/xray" and cov
 security_reconcile_policy() {
     SECURITY_POLICY_STARTED=true
     reconcile_proxy_firewall "$SECURITY_NOTLS" || return 1
+    local retired
+    for retired in ${SECURITY_REMOVED_PORTS:-}; do
+        if grep -Eq "^${retired}[|]ALLOW[|]" "$SECURITY_WORK/firewall.restore"; then
+            ufw --force delete allow "$retired/tcp" || return 1
+        fi
+    done
     configure_proxy_auth_jail "$SECURITY_PORTS" || return 1
     fail2ban-client -t >/dev/null 2>&1 || return 1
     reload_fail2ban || return 1
@@ -305,15 +386,20 @@ security_reconcile_policy() {
 
 security_inspect() {
     security_paths
+    if [[ ! -f $SECURITY_XRAY ]]; then
+        echo "Proxy authentication preflight failed: missing $SECURITY_XRAY" >&2
+        return 1
+    fi
+    load_service_settings "$SECURITY_ROOT" || return 1
     local notls ports expected_image actual_image active_xray active_nginx staged_nginx changes mounts
     notls=$(resolve_proxy_notls "${PROXY_NOTLS_ENABLED-}" "$SECURITY_ROOT/.env") || return 1
     ports=$(proxy_auth_ports "$notls") || return 1
     validate_proxy_auth_config "$SECURITY_XRAY" || return 1
     staged_nginx=$(security_stage_nginx "$SECURITY_NGINX" /dev/stdout "$notls") || return 1
     [[ "$staged_nginx" == "$(cat "$SECURITY_NGINX")" ]] || return 1
-    jq -e '[.inbounds[] | select(.tag == "http-proxy" or .tag == "socks5-proxy") |
+    jq -e --argjson tags "$(proxy_receiver_tags)" '[.inbounds[] | select(.tag == "http-proxy" or .tag == "socks5-proxy") |
         .listen == "127.0.0.1" and .streamSettings.sockopt.acceptProxyProtocol == true] |
-        length == 2 and all' "$SECURITY_XRAY" >/dev/null || return 1
+        length == ($tags | length) and all' "$SECURITY_XRAY" >/dev/null || return 1
     [[ -f "$SECURITY_LOG" && ! -L "$SECURITY_LOG" && "$(stat -c %a "$SECURITY_LOG")" == 600 ]] || return 1
     mounts=$(docker inspect --format '{{json .Mounts}}' familytraffic) || return 1
     security_validate_journal_mounts "$mounts" "$(dirname "$SECURITY_LOG")" || return 1

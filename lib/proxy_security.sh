@@ -29,8 +29,24 @@ resolve_proxy_notls() {
     printf '%s\n' "${saved:-false}"
 }
 
+proxy_receiver_tags() {
+    if [[ ${FT_SERVICE_MODE-} == vpn ]]; then
+        echo '[]'
+    elif [[ -z ${FT_SOCKS_TLS_PORT-1080}${FT_SOCKS_PLAIN_PORT-} ]]; then
+        echo '["http-proxy"]'
+    else
+        echo '["http-proxy","socks5-proxy"]'
+    fi
+}
+
 # Reject proxy listeners that could accept anonymous or empty credentials.
 validate_proxy_auth_config() {
+    if [[ -n ${FT_SERVICE_MODE:-} ]] && ! jq -e --argjson tags "$(proxy_receiver_tags)" '
+        [.inbounds[] | select(.tag == "http-proxy" or .tag == "socks5-proxy") | .tag] | sort == $tags
+    ' "$1" >/dev/null; then
+        echo 'Proxy receivers disagree with selected services' >&2
+        return 1
+    fi
     if ! jq -e '
         (.inbounds | type == "array") and
         ([.inbounds[] | select(.tag == "http-proxy" or .tag == "socks5-proxy") |
@@ -53,18 +69,19 @@ validate_proxy_auth_config() {
 # Prepare selected proxy listeners without creating a user or permitting traffic.
 # The private lock credential keeps HTTP authentication enabled with no saved users.
 initialize_pending_proxy_config() {
-    python3 - "$1" <<'PY'
+    python3 - "$1" "$(proxy_receiver_tags)" <<'PY'
 import json,pathlib,secrets,sys
 path=pathlib.Path(sys.argv[1]);config=json.loads(path.read_text())
 proxies=[i for i in config['inbounds'] if i['tag'] in ('http-proxy','socks5-proxy')]
-if sorted(i['tag'] for i in proxies)!=['http-proxy','socks5-proxy'] or any(i['settings'].get('accounts') for i in proxies):
+tags=json.loads(sys.argv[2])
+if not tags or sorted(i['tag'] for i in proxies)!=tags or any(i['settings'].get('accounts') for i in proxies):
     raise SystemExit('Only empty initial proxy receivers can be locked')
 if not any(o.get('tag')=='blocked' and o.get('protocol')=='blackhole' for o in config['outbounds']):
     raise SystemExit('Missing blackhole outbound for unprovisioned proxies')
 account={'user':'@ft-unprovisioned','pass':secrets.token_hex(32)}
 for inbound in proxies:
     inbound['settings']['accounts']=[account]
-rule={'type':'field','inboundTag':['http-proxy','socks5-proxy'],'outboundTag':'blocked'}
+rule={'type':'field','inboundTag':tags,'outboundTag':'blocked'}
 config.setdefault('routing',{}).setdefault('rules',[]).insert(0,rule)
 with path.open('w') as out:
     json.dump(config,out,indent=2);out.write('\n')
@@ -72,13 +89,13 @@ PY
 }
 
 proxy_config_is_pending() {
-    jq -e '
+    jq -e --argjson tags "$(proxy_receiver_tags)" '
         [.inbounds[] | select(.tag == "http-proxy" or .tag == "socks5-proxy")] as $proxies |
-        ($proxies | map(.tag) | sort == ["http-proxy","socks5-proxy"]) and
-        ($proxies[0].settings.accounts == $proxies[1].settings.accounts) and
+        ($tags != [] and ($proxies | map(.tag) | sort == $tags)) and
+        (all($proxies[]; .settings.accounts == $proxies[0].settings.accounts)) and
         all($proxies[]; .settings.accounts | length == 1 and
             .[0].user == "@ft-unprovisioned" and (.[0].pass | test("^[a-f0-9]{64}$"))) and
-        .routing.rules[0] == {type:"field",inboundTag:["http-proxy","socks5-proxy"],outboundTag:"blocked"} and
+        .routing.rules[0] == {type:"field",inboundTag:$tags,outboundTag:"blocked"} and
         any(.outbounds[]; .tag == "blocked" and .protocol == "blackhole")
     ' "$1" >/dev/null 2>&1
 }
@@ -102,26 +119,30 @@ stage_proxy_security_config() {
     local current="$1" output="$2" staged
     validate_proxy_auth_config "$current" || return 1
     staged=$(mktemp "${output}.tmp.XXXXXX") || return 1
-    if ! jq -e '
-        def proxy_tags: ["http-proxy", "socks5-proxy"];
+    if ! jq -e --argjson tags "$(proxy_receiver_tags)" '
+        def proxy_tags: $tags;
         def proxy_rule: (.inboundTag == null) or any(.inboundTag[]?; . as $tag | proxy_tags | index($tag));
-        def generated_rule:
+        def managed_direct:
             .type == "field" and .outboundTag == "direct" and
             ((.inboundTag // []) | sort) == proxy_tags and
-            .source == ["127.0.0.1"] and
             (keys | sort) == ["inboundTag", "outboundTag", "source", "type"];
         if ([.inbounds[] | select(.tag == "http-proxy" and .protocol == "http")] | length) != 1 or
-           ([.inbounds[] | select(.tag == "socks5-proxy" and .protocol == "socks")] | length) != 1
+           ([.inbounds[] | select(.tag == "socks5-proxy" and .protocol == "socks")] | length) != (if ($tags | index("socks5-proxy")) == null then 0 else 1 end)
         then error("require one HTTP and one SOCKS proxy inbound") else . end |
-        if any(.routing.rules[]?; proxy_rule and has("source") and (generated_rule | not))
-        then error("ambiguous custom proxy source restriction") else . end |
+        def managed_deny:
+            . == {type:"field",inboundTag:$tags,outboundTag:"blocked"};
+        (.routing.rules // []) as $rules |
+        reduce range(0; $rules|length) as $i (.;
+            $rules[$i] as $rule |
+            if ($rule | proxy_rule and has("source")) then
+                if ($rule | managed_direct) and ($rules[$i+1] | managed_deny) then .
+                elif ($rule | managed_direct and .source == ["127.0.0.1"]) then del(.routing.rules[$i].source)
+                else error("ambiguous custom proxy source restriction") end
+            else . end) |
         (.inbounds[] | select(.tag == "http-proxy" or .tag == "socks5-proxy")) |=
             (.listen = "127.0.0.1" |
              .port = (if .tag == "http-proxy" then 18118 else 10800 end) |
-             .streamSettings.sockopt.acceptProxyProtocol = true) |
-        if .routing.rules then
-            .routing.rules |= map(if generated_rule then del(.source) else . end)
-        else . end
+             .streamSettings.sockopt.acceptProxyProtocol = true)
     ' "$current" > "$staged" 2>/dev/null; then
         rm -f "$staged"
         echo 'Proxy staging failed: invalid inbounds or ambiguous custom proxy source restriction' >&2
@@ -132,6 +153,16 @@ stage_proxy_security_config() {
 }
 
 proxy_auth_ports() {
+    if [[ -n ${FT_SERVICE_MODE:-} ]]; then
+        local -a ports=()
+        local port
+        for port in "${FT_SOCKS_TLS_PORT-}" "${FT_SOCKS_PLAIN_PORT-}" "${FT_HTTPS_PROXY_PORT-}" "${FT_HTTP_PLAIN_PORT-}"; do
+            [[ -z $port ]] || ports+=("$port")
+        done
+        local IFS=,
+        printf '%s\n' "${ports[*]}"
+        return
+    fi
     case "$1" in
         true) printf '%s\n' '1080,1081,8118,8119' ;;
         false) printf '%s\n' '1080,8118' ;;
@@ -146,13 +177,25 @@ _proxy_firewall_changes() {
     status_text=$(LC_ALL=C ufw status numbered) || return 1
     [[ "$status_text" == *'Status: active'* ]] || { echo 'UFW must be active' >&2; return 1; }
     local -a changes=()
-    local managed found
+    local managed found portion overlaps
+    local -a portions
     for port in ${ports//,/ }; do
         managed=false found=false
         while IFS= read -r line; do
-            [[ "$line" =~ (^|[^0-9])${port}([^0-9]|$) ]] || continue
             normalized=$(printf '%s\n' "$line" | sed -E 's/^\[[[:space:]]*[0-9]+\][[:space:]]*//; s/ \(v6\)//g')
             read -r rule_port action direction origin comment <<< "$normalized"
+            [[ $rule_port != */udp ]] || continue
+            overlaps=false
+            IFS=, read -ra portions <<< "${rule_port%/*}"
+            for portion in "${portions[@]}"; do
+                if [[ $portion == "$port" ]]; then overlaps=true; break; fi
+                if [[ $portion =~ ^([0-9]{1,5}):([0-9]{1,5})$ ]] &&
+                   (( 10#${BASH_REMATCH[1]} <= port && port <= 10#${BASH_REMATCH[2]} )); then
+                    overlaps=true
+                    break
+                fi
+            done
+            [[ $overlaps == true ]] || continue
             if [[ "$rule_port" != "$port/tcp" || "$direction" != IN || "$origin" != Anywhere ||
                   ( "$action" != ALLOW && "$action" != LIMIT ) ]]; then
                 echo "Conflicting UFW rule for proxy port $port; preserve operator policy" >&2
@@ -160,9 +203,9 @@ _proxy_firewall_changes() {
             fi
             case "$comment" in
                 '# familyTraffic authenticated proxy')
-                    [[ "$action" == ALLOW && ( "$port" == 1080 || "$port" == 1081 || "$port" == 8118 ) ]] || return 1 ;;
+                    [[ "$action" == ALLOW && ( "$port" == "${FT_SOCKS_TLS_PORT-1080}" || "$port" == "${FT_SOCKS_PLAIN_PORT-1081}" || "$port" == "${FT_HTTPS_PROXY_PORT-8118}" ) ]] || return 1 ;;
                 '# familyTraffic HTTP proxy no-TLS')
-                    [[ "$action" == ALLOW && "$port" == 8119 ]] || return 1 ;;
+                    [[ "$action" == ALLOW && "$port" == "${FT_HTTP_PLAIN_PORT-8119}" ]] || return 1 ;;
                 '# FamilyTraffic proxy auth'|'# VLESS SOCKS5 Proxy (rate-limited)'|'# VLESS HTTP Proxy (rate-limited)'|'# VLESS SOCKS5 Proxy no-TLS (rate-limited)'|'# VLESS HTTP Proxy no-TLS (rate-limited)') ;;
                 *) echo "Unrecognized UFW rule for proxy port $port" >&2; return 1 ;;
             esac

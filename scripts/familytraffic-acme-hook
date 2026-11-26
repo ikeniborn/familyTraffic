@@ -1,0 +1,53 @@
+#!/bin/bash
+# Certbot serializes hooks for the managed certificate on this host.
+set -euo pipefail
+export LC_ALL=C
+state=/run/familytraffic-acme.until
+
+# These rules exist only in the active UFW chains. An interrupted Certbot
+# process cannot leave an unrestricted rule in the saved firewall policy.
+change_rules() {
+    local operation=$1 tool chain
+    local -a rule=(-p tcp --dport 80 -m time --datestop "$until" -m comment --comment familytraffic-http01 -j ACCEPT)
+    for tool in iptables ip6tables; do
+        chain=ufw-user-input
+        if [[ $tool == ip6tables ]]; then
+            chain=ufw6-user-input
+            "$tool" -w -S "$chain" >/dev/null 2>&1 || continue
+        fi
+        if [[ $operation == open ]]; then
+            "$tool" -w -A "$chain" "${rule[@]}" || return 1
+        elif "$tool" -w -C "$chain" "${rule[@]}" 2>/dev/null; then
+            "$tool" -w -D "$chain" "${rule[@]}" || return 1
+        fi
+    done
+}
+
+close_window() {
+    [[ -f $state ]] || return 0
+    read -r until < "$state"
+    change_rules close || return 1
+    rm -f "$state"
+}
+
+acme_hook_main() {
+    case "${1:-}" in
+        open)
+            close_window
+            ufw_state=$(ufw status)
+            [[ $ufw_state == 'Status: active'* ]] || return 0
+            umask 077
+            until=$(date -u -d '+15 minutes' '+%Y-%m-%dT%H:%M:%S')
+            printf '%s\n' "$until" > "$state"
+            if ! change_rules open; then close_window; return 1; fi ;;
+        close) close_window ;;
+        reload)
+            # Certbot also calls deploy hooks during initial issuance.
+            if [[ -f /opt/familytraffic/.env ]]; then
+                docker exec familytraffic nginx -s reload
+            fi ;;
+        *) return 2 ;;
+    esac
+}
+
+if [[ ${BASH_SOURCE[0]} == "$0" ]]; then acme_hook_main "$@"; fi

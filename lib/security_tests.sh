@@ -453,11 +453,7 @@ get_domain() {
 }
 
 get_vless_port() {
-    if [[ -f "$ENV_FILE" ]]; then
-        grep "^VLESS_PORT=" "$ENV_FILE" 2>/dev/null | cut -d'=' -f2 || echo "443"
-    else
-        echo "443"
-    fi
+    printf '%s\n' "${FT_VLESS_PUBLIC_PORT-443}"
 }
 
 # ============================================================================
@@ -577,22 +573,16 @@ test_02_haproxy_tls() {
     fi
 
     # Test nginx proxy ports are listening (familytraffic host network)
-    local socks5_port="1080"
-    local http_port="8118"
-
-    if ss -tlnp | grep -q ":${socks5_port}"; then
-        print_success "nginx SOCKS5 port listening: $socks5_port"
-    else
-        print_failure "nginx SOCKS5 port not listening: $socks5_port"
-        return 1
-    fi
-
-    if ss -tlnp | grep -q ":${http_port}"; then
-        print_success "nginx HTTP proxy port listening: $http_port"
-    else
-        print_failure "nginx HTTP proxy port not listening: $http_port"
-        return 1
-    fi
+    local port sockets
+    sockets=$(ss -H -ltn) || return 1
+    for port in "${FT_SOCKS_TLS_PORT-1080}" "${FT_HTTPS_PROXY_PORT-8118}"; do
+        [[ -n $port ]] || continue
+        if ! awk -v port="$port" '$4 ~ (":" port "$") {found=1} END {exit !found}' <<< "$sockets"; then
+            print_failure "Missing TLS proxy listener on $port"
+            return 1
+        fi
+        print_success "TLS proxy listener on $port"
+    done
 
     print_success "nginx TLS termination configuration valid (v5.33)"
     return 0
@@ -653,7 +643,7 @@ test_03_traffic_encryption() {
         print_info "Testing proxy encrypted traffic via HAProxy..."
 
         # Make request through HTTPS proxy
-        if ! timeout 10 curl -x "https://${test_user}:${proxy_password}@${domain}:8118" \
+        if ! timeout 10 curl -x "https://${test_user}:${proxy_password}@${domain}:${FT_HTTPS_PROXY_PORT-8118}" \
             -s -o /dev/null "$test_url" 2>/dev/null; then
             print_warning "Proxy connection failed (expected if not accessible from test location)"
         else
@@ -664,7 +654,7 @@ test_03_traffic_encryption() {
 
         if [[ -n "$proxy_password" ]]; then
             # Test localhost proxy (should fail from remote, but we'll try)
-            timeout 5 curl --socks5 "${test_user}:${proxy_password}@127.0.0.1:1080" \
+            timeout 5 curl --socks5 "${test_user}:${proxy_password}@127.0.0.1:${FT_SOCKS_PLAIN_PORT:-1080}" \
                 -s -o /dev/null "$test_url" 2>/dev/null || true
         fi
     fi
@@ -818,12 +808,12 @@ test_04_certificate_security() {
     fi
 
     # Test TLS connection to HAProxy TLS ports
-    print_info "Testing TLS connection to HAProxy SOCKS5 port (1080)..."
+    print_info "Checking the HTTPS proxy certificate..."
 
-    if timeout 5 openssl s_client -connect "${domain}:1080" -tls1_3 </dev/null 2>&1 | grep -q "Verify return code: 0"; then
-        print_success "TLS connection to SOCKS5 port successful (certificate valid)"
+    if timeout 5 openssl s_client -connect "${domain}:${FT_HTTPS_PROXY_PORT-8118}" -tls1_3 </dev/null 2>&1 | grep -q "Verify return code: 0"; then
+        print_success "TLS connection to HTTPS proxy successful (certificate valid)"
     else
-        print_warning "TLS connection to SOCKS5 port failed (may not support direct TLS handshake)"
+        print_warning "TLS connection to HTTPS proxy failed (may not support direct TLS handshake)"
     fi
 
     print_success "Certificate security validation completed"
@@ -943,7 +933,7 @@ test_06_tls_vulnerabilities() {
     local weak_found=0
 
     for cipher in "${weak_ciphers[@]}"; do
-        if openssl s_client -connect "${domain}:8118" -cipher "$cipher" </dev/null 2>&1 | grep -q "Cipher.*$cipher"; then
+        if openssl s_client -connect "${domain}:${FT_HTTPS_PROXY_PORT-8118}" -cipher "$cipher" </dev/null 2>&1 | grep -q "Cipher.*$cipher"; then
             print_critical "Weak cipher supported: $cipher"
             ((weak_found++)) || true
         fi
@@ -959,14 +949,14 @@ test_06_tls_vulnerabilities() {
     # Test for SSLv2/SSLv3 (should be disabled)
     print_info "Testing for obsolete SSL/TLS versions..."
 
-    if openssl s_client -connect "${domain}:8118" -ssl2 </dev/null 2>&1 | grep -q "SSLv2"; then
+    if openssl s_client -connect "${domain}:${FT_HTTPS_PROXY_PORT-8118}" -ssl2 </dev/null 2>&1 | grep -q "SSLv2"; then
         print_critical "SSLv2 is enabled (CRITICAL VULNERABILITY)"
         return 1
     else
         print_success "SSLv2 is disabled"
     fi
 
-    if openssl s_client -connect "${domain}:8118" -ssl3 </dev/null 2>&1 | grep -q "SSLv3"; then
+    if openssl s_client -connect "${domain}:${FT_HTTPS_PROXY_PORT-8118}" -ssl3 </dev/null 2>&1 | grep -q "SSLv3"; then
         print_critical "SSLv3 is enabled (CRITICAL VULNERABILITY - POODLE)"
         return 1
     else
@@ -974,7 +964,7 @@ test_06_tls_vulnerabilities() {
     fi
 
     # Test for TLS 1.0/1.1 (should be disabled for modern security)
-    if openssl s_client -connect "${domain}:8118" -tls1 </dev/null 2>&1 | grep -q "TLSv1"; then
+    if openssl s_client -connect "${domain}:${FT_HTTPS_PROXY_PORT-8118}" -tls1 </dev/null 2>&1 | grep -q "TLSv1"; then
         print_warning "TLS 1.0 is enabled (outdated, should consider disabling)"
     else
         print_success "TLS 1.0 is disabled"
@@ -983,7 +973,7 @@ test_06_tls_vulnerabilities() {
     # Test for perfect forward secrecy (PFS)
     print_info "Testing for Perfect Forward Secrecy support..."
 
-    if openssl s_client -connect "${domain}:8118" -cipher "ECDHE" </dev/null 2>&1 | grep -q "Cipher.*ECDHE"; then
+    if openssl s_client -connect "${domain}:${FT_HTTPS_PROXY_PORT-8118}" -cipher "ECDHE" </dev/null 2>&1 | grep -q "Cipher.*ECDHE"; then
         print_success "Perfect Forward Secrecy (ECDHE) supported"
     else
         print_warning "Perfect Forward Secrecy may not be enabled"
@@ -999,7 +989,7 @@ test_06_tls_vulnerabilities() {
 
     if [[ -n "$proxy_password" ]]; then
         local headers
-        headers=$(timeout 10 curl -x "https://${test_user}:${proxy_password}@${domain}:8118" \
+        headers=$(timeout 10 curl -x "https://${test_user}:${proxy_password}@${domain}:${FT_HTTPS_PROXY_PORT-8118}" \
             -I -s "https://www.google.com" 2>/dev/null || echo "")
 
         if echo "$headers" | grep -qi "strict-transport-security"; then
@@ -1019,34 +1009,8 @@ test_07_proxy_protocol_security() {
     print_header "TEST 7: Proxy Protocol Security Validation"
     print_test "Testing SOCKS5 and HTTP proxy security configurations"
 
-    # Check if proxy is enabled
-    if ! jq -e '.inbounds[] | select(.tag == "socks5-proxy")' "$XRAY_CONFIG" &>/dev/null; then
-        print_skip "Proxy support not enabled"
-        return 0
-    fi
-
-    # Test 1: Verify authentication is required
-    print_info "Verifying proxy authentication is enforced..."
-
-    local socks5_auth
-    socks5_auth=$(jq -r '.inbounds[] | select(.tag == "socks5-proxy") | .settings.auth' "$XRAY_CONFIG" 2>/dev/null)
-
-    if [[ "$socks5_auth" == "password" ]]; then
-        print_success "SOCKS5 authentication required"
-    else
-        print_critical "SOCKS5 authentication NOT required - SECURITY RISK"
-        return 1
-    fi
-
-    local http_auth
-    http_auth=$(jq -r '.inbounds[] | select(.tag == "http-proxy") | .settings.auth' "$XRAY_CONFIG" 2>/dev/null)
-
-    if [[ "$http_auth" == "password" ]]; then
-        print_success "HTTP proxy authentication required"
-    else
-        print_critical "HTTP proxy authentication NOT required - SECURITY RISK"
-        return 1
-    fi
+    if [[ ${FT_SERVICE_MODE-} == vpn ]]; then print_skip "Public proxies disabled"; return 0; fi
+    validate_proxy_auth_config "$XRAY_CONFIG" || { print_critical "Invalid proxy authentication"; return 1; }
 
     # Test 2: Check proxy listen addresses
     print_info "Checking proxy listen addresses..."
@@ -1381,8 +1345,10 @@ main() {
     check_root
     check_prerequisites
 
-    # Run test suite
-    run_test test_01_reality_tls_config
+    source "$(dirname "${BASH_SOURCE[0]}")/service_modes.sh"
+    source "$(dirname "${BASH_SOURCE[0]}")/proxy_security.sh"
+    load_service_settings "$(dirname "$ENV_FILE")" || return 1
+    if [[ -n $FT_VLESS_PUBLIC_PORT ]]; then run_test test_01_reality_tls_config; fi
     run_test test_02_haproxy_tls  # v4.3: HAProxy TLS termination
 
     if [[ "$QUICK_MODE" != "true" ]]; then
@@ -1392,11 +1358,11 @@ main() {
     fi
 
     run_test test_04_certificate_security
-    run_test test_05_dpi_resistance
+    if [[ -n $FT_VLESS_PUBLIC_PORT ]]; then run_test test_05_dpi_resistance; fi
     run_test test_06_tls_vulnerabilities
     run_test test_07_proxy_protocol_security
     run_test test_08_data_leak_detection
-    run_test test_xtls_vision_enabled  # TC-01 (v5.25): XTLS Vision flow field verification
+    if [[ -n $FT_VLESS_PUBLIC_PORT ]]; then run_test test_xtls_vision_enabled; fi
 
     # Print summary and exit
     print_summary

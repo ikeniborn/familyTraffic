@@ -158,17 +158,10 @@ orchestrate_installation() {
 
     echo "  ✓ Log directory permissions set"
 
-    # Step 2: Generate X25519 keys
-    generate_reality_keys || {
-        echo -e "${RED}Failed to generate Reality keys${NC}" >&2
-        return 1
-    }
-
-    # Step 3: Generate Short ID
-    generate_short_id || {
-        echo -e "${RED}Failed to generate Short ID${NC}" >&2
-        return 1
-    }
+    if [[ ${FT_SERVICE_MODE:-both} != proxy ]]; then
+        generate_reality_keys || return 1
+        generate_short_id || return 1
+    fi
 
     # Create users before proxy configuration so listeners never start anonymously.
     create_users_json || return 1
@@ -203,14 +196,7 @@ orchestrate_installation() {
         echo -e "${YELLOW}Note: External proxy manager not loaded, skipping database initialization${NC}"
     fi
 
-    # Step 6: Create Nginx configuration
-    create_nginx_config || {
-        echo -e "${RED}Failed to create Nginx configuration${NC}" >&2
-        return 1
-    }
-
-
-    # Step 6.5: Generate Nginx configuration (v5.30 unified stream+http, replaces HAProxy)
+    # Write the unified stream and HTTP configuration once.
     generate_nginx_config_wrapper || {
         echo -e "${RED}Failed to generate Nginx configuration${NC}" >&2
         return 1
@@ -233,12 +219,6 @@ orchestrate_installation() {
 
     # Configure the managed jail only through the image/configuration transaction below.
 
-    # Step 10: Configure UFW firewall
-    configure_ufw || {
-        echo -e "${RED}Failed to configure UFW${NC}" >&2
-        return 1
-    }
-
     # Step 11: Set permissions (MUST run BEFORE deploy_containers!)
     # Docker mounts files with current permissions - changing them after won't affect running containers
     set_permissions || {
@@ -254,11 +234,34 @@ orchestrate_installation() {
         return 1
     }
 
-    # Step 13: Deploy containers (now files have correct permissions)
+    # Preserve an existing container if a late bind prevents this installation.
+    local previous_container_id
+    previous_container_id=$(docker ps -aq --filter 'name=^/familytraffic$') || return 1
     deploy_containers || {
+        if [[ -z $previous_container_id ]]; then
+            local created_container
+            created_container=$(docker ps -aq --filter 'name=^/familytraffic$' \
+                --filter 'label=com.docker.compose.service=familytraffic' \
+                --filter "label=com.docker.compose.project.working_dir=$INSTALL_ROOT") || return 1
+            if [[ -n $created_container ]]; then docker stop "$created_container" >/dev/null || return 1; fi
+        fi
         echo -e "${RED}Failed to deploy containers${NC}" >&2
         return 1
     }
+
+    # Step 10: Configure UFW firewall
+    configure_ufw || {
+        echo -e "${RED}Failed to configure UFW${NC}" >&2
+        return 1
+    }
+
+    # Grant VPN access only after nginx and Xray own their selected sockets.
+    if [[ ${FT_SERVICE_MODE:-both} != proxy ]]; then
+        local vpn_port=${FT_VLESS_PUBLIC_PORT:-443}
+        if ! ufw status numbered | grep -Eq "(^|] *)${vpn_port}/tcp[[:space:]]+ALLOW"; then
+            ufw allow "${vpn_port}/tcp" comment 'Nginx VLESS+Reverse Proxy (v5.30)' || return 1
+        fi
+    fi
 
     # Step 14: Install CLI tools
     install_cli_tools || {
@@ -367,7 +370,7 @@ generate_reality_keys() {
     PRIVATE_KEY=$(echo "$key_output" | grep "Private key:" | awk '{print $3}')
     PUBLIC_KEY=$(echo "$key_output" | grep "Public key:" | awk '{print $3}')
 
-    if [[ -z "$PRIVATE_KEY" ]] || [[ -z "$PUBLIC_KEY" ]]; then
+    if [[ -z "$PRIVATE_KEY" || -z "$PUBLIC_KEY" ]]; then
         echo -e "${RED}Failed to parse keys from xray output${NC}" >&2
         echo "Output was: $key_output" >&2
         return 1
@@ -436,7 +439,7 @@ generate_routing_json() {
     "rules": [
       {
         "type": "field",
-        "inboundTag": ["socks5-proxy", "http-proxy"],
+        "inboundTag": $(proxy_receiver_tags),
         "outboundTag": "direct"
       }
     ]
@@ -634,9 +637,9 @@ create_xray_config() {
     echo -e "${CYAN}[4/12] Creating Xray configuration...${NC}"
 
     # Validate required variables
-    if [[ -z "$PRIVATE_KEY" ]] || [[ -z "$SHORT_ID" ]] || \
-       [[ -z "$REALITY_DEST" ]] || [[ -z "$REALITY_DEST_PORT" ]] || \
-       [[ -z "$VLESS_PORT" ]]; then
+    if [[ ${FT_SERVICE_MODE:-both} != proxy &&
+          ( -z ${PRIVATE_KEY:-} || -z ${SHORT_ID:-} || -z ${REALITY_DEST:-} ||
+            -z ${REALITY_DEST_PORT:-} || -z ${VLESS_PORT:-} ) ]]; then
         echo -e "${RED}Missing required configuration parameters${NC}" >&2
         return 1
     fi
@@ -654,24 +657,11 @@ create_xray_config() {
         _xray_access="/var/log/xray/access.log"
     fi
 
-    staged_config=$(mktemp "${XRAY_CONFIG}.stage.XXXXXX") || return 1
-    chmod 600 "$staged_config" || return 1
-    cat > "$staged_config" <<EOF
+    local receivers="" inbound
+    if [[ ${FT_SERVICE_MODE:-both} != proxy ]]; then
+        receivers=$(cat <<EOF
 {
-  "log": {
-    "loglevel": "${_xray_loglevel}",
-    "access": "${_xray_access}",
-    "error": "/var/log/xray/error.log"
-  },
-  "dns": {
-    "servers": [
-      "${DETECTED_DNS_PRIMARY:-1.1.1.1}",
-      "${DETECTED_DNS_SECONDARY:-8.8.8.8}",
-      "${DETECTED_DNS_TERTIARY:-77.88.8.8}"
-    ],
-    "queryStrategy": "UseIPv4"
-  },
-  "inbounds": [{
+    "listen": "127.0.0.1",
     "port": ${VLESS_PORT},
     "protocol": "vless",
     "tag": "vless-reality",
@@ -708,10 +698,38 @@ create_xray_config() {
         "shortIds": ["${SHORT_ID}", ""]
       }
     }
-  }$(if [[ "$enable_proxy" == "true" ]]; then
-    generate_socks5_inbound_json
-    generate_http_inbound_json
-fi)$(if [[ "$enable_tier2" == "true" ]]; then
+  }
+EOF
+)
+    fi
+    if [[ $enable_proxy == true ]]; then
+        if [[ -n ${FT_SOCKS_TLS_PORT-1080}${FT_SOCKS_PLAIN_PORT-} ]]; then
+            inbound=$(generate_socks5_inbound_json) || return 1
+            receivers+="${receivers:+,}"
+            receivers+="${inbound#*,}"
+        fi
+        inbound=$(generate_http_inbound_json) || return 1
+        receivers+="${receivers:+,}${inbound#*,}"
+    fi
+
+    staged_config=$(mktemp "${XRAY_CONFIG}.stage.XXXXXX") || return 1
+    chmod 600 "$staged_config" || return 1
+    cat > "$staged_config" <<EOF
+{
+  "log": {
+    "loglevel": "${_xray_loglevel}",
+    "access": "${_xray_access}",
+    "error": "/var/log/xray/error.log"
+  },
+  "dns": {
+    "servers": [
+      "${DETECTED_DNS_PRIMARY:-1.1.1.1}",
+      "${DETECTED_DNS_SECONDARY:-8.8.8.8}",
+      "${DETECTED_DNS_TERTIARY:-77.88.8.8}"
+    ],
+    "queryStrategy": "UseIPv4"
+  },
+  "inbounds": [${receivers}$(if [[ "$enable_tier2" == "true" ]]; then
     generate_websocket_inbound_json
     generate_xhttp_inbound_json
     generate_grpc_inbound_json
@@ -764,39 +782,7 @@ EOF
     fi
 
     echo "  ✓ Configuration file: ${XRAY_CONFIG}"
-    echo "  ✓ Listen port: ${VLESS_PORT}"
-    echo "  ✓ Destination: ${REALITY_DEST}:${REALITY_DEST_PORT}"
-    echo "  ✓ Fallback to Nginx configured"
-    if [[ -n "${DETECTED_DNS_PRIMARY}" ]]; then
-        echo "  ✓ DNS Servers:"
-        echo "    - Primary:   ${DETECTED_DNS_PRIMARY}"
-        echo "    - Secondary: ${DETECTED_DNS_SECONDARY}"
-        echo "    - Tertiary:  ${DETECTED_DNS_TERTIARY}"
-    else
-        echo "  ✓ DNS Servers: 1.1.1.1, 8.8.8.8, 77.88.8.8 (default fallback)"
-    fi
-    echo "  ✓ Policy Limits (v5.33 - optimized for proxy usage):"
-    echo "    - Handshake Timeout: 15s"
-    echo "    - Connection Idle: 3600s (1 hour)"
-    echo "    - Buffer Size: 10240 KB (10 MB)"
-
-    if [[ "$enable_proxy" == "true" ]]; then
-        if [[ "${ENABLE_PUBLIC_PROXY:-false}" == "true" ]]; then
-            # v3.3: TLS-encrypted public proxy
-            local domain="${DOMAIN:-SERVER_DOMAIN}"
-            echo "  ✓ SOCKS5 Proxy (0.0.0.0:1080) - TLS-ENCRYPTED PUBLIC ACCESS"
-            echo "  ✓ HTTP Proxy (0.0.0.0:8118) - TLS-ENCRYPTED PUBLIC ACCESS"
-            echo "  ✓ TLS Certificate: ${domain}"
-            echo "  ⚠️  SOCKS5 URI: socks5s://user:pass@${domain}:1080"
-            echo "  ⚠️  HTTP URI: https://user:pass@${domain}:8118"
-            echo "  ⚠️  WARNING: Proxies require TLS-capable clients (v3.3)"
-        else
-            # v3.1: Localhost-only proxy (no TLS needed)
-            echo "  ✓ SOCKS5 Proxy (127.0.0.1:1080) - LOCALHOST ONLY"
-            echo "  ✓ HTTP Proxy (127.0.0.1:8118) - LOCALHOST ONLY"
-            echo "  ℹ️  Access via VPN connection only"
-        fi
-    fi
+    echo "  Selected receivers: $(jq -r '[.inbounds[].tag] | join(", ")' "$staged_config")"
 
     # Repopulate proxy accounts from users.json to prevent open proxy access.
     # xray HTTP inbound has no "auth" flag — empty accounts = no auth required.
@@ -1127,13 +1113,7 @@ generate_nginx_config_wrapper() {
     rm -f "$tmp_conf"
 
     echo "  ✓ Nginx config: ${VLESS_DIR}/config/nginx/nginx.conf"
-    echo "  ✓ Stream ports: 443 (SNI ssl_preread), 1080 (SOCKS5 TLS), 8118 (HTTP TLS)"
-    if [[ "${enable_notls}" == "true" ]]; then
-        echo "  ✓ No-TLS ports: 1081 (SOCKS5), 8119 (HTTP) — credentials in cleartext!"
-    fi
-    echo "  ✓ HTTP block: port 8448 (Tier 2 loopback placeholder)"
-    echo "  ✓ Cert domain: ${cert_domain}"
-
+    echo "  Configured service mode: ${FT_SERVICE_MODE:-legacy}"
     echo -e "${GREEN}✓ Nginx configuration created${NC}"
     return 0
 }
@@ -1185,7 +1165,9 @@ create_env_file() {
     local server_ip
     server_ip=$(curl -s --max-time 5 ifconfig.me 2>/dev/null || echo "SERVER_IP_NOT_DETECTED")
 
-    cat > "${ENV_FILE}" <<EOF
+    local staged_env key
+    staged_env=$(mktemp "${ENV_FILE}.XXXXXX") || return 1
+    cat > "$staged_env" <<EOF
 # VLESS Reality VPN Environment Variables
 # Generated: $(date -Iseconds)
 # DO NOT commit this file to version control
@@ -1234,10 +1216,19 @@ ACME_EMAIL=${EMAIL:-}
 FT_DEBUG=${FT_DEBUG:-false}
 EOF
 
-    if [[ ! -f "${ENV_FILE}" ]]; then
-        echo -e "${RED}Failed to create ${ENV_FILE}${NC}" >&2
-        return 1
+    if [[ -n ${FT_SERVICE_MODE:-} ]]; then
+        validate_service_settings || { rm -f "$staged_env"; return 1; }
+        for key in FT_SERVICE_MODE FT_VLESS_PUBLIC_PORT FT_HTTPS_PROXY_PORT FT_SOCKS_TLS_PORT FT_HTTP_PLAIN_PORT FT_SOCKS_PLAIN_PORT; do
+            printf '%s=%s\n' "$key" "${!key}" >> "$staged_env"
+        done
     fi
+    if [[ -f $ENV_FILE ]]; then
+        awk -F= 'NR==FNR {if (/^[A-Za-z_][A-Za-z_0-9]*=/) keys[$1]=1; next}
+            /^[A-Za-z_][A-Za-z_0-9]*=/ && !($1 in keys)' "$staged_env" "$ENV_FILE" > "$staged_env.extra" || return 1
+        cat "$staged_env.extra" >> "$staged_env" || return 1
+        rm -f "$staged_env.extra"
+    fi
+    mv -f "$staged_env" "$ENV_FILE" || return 1
 
     echo "  ✓ Environment file: ${ENV_FILE}"
 
@@ -1327,19 +1318,6 @@ EOF
 
     # Preserve operator rules, including legacy ports. Report exposure below.
 
-    # v5.30: Allow Nginx external port 443 (NOT VLESS_PORT which is internal 8443)
-    # Nginx stream listens on 443 externally via ssl_preread SNI routing, forwards Reality to Xray on 8443
-    local nginx_external_port=443
-    echo "  Allowing port ${nginx_external_port} (Nginx external SNI frontend)..."
-    if ufw status numbered | grep -q "${nginx_external_port}/tcp.*ALLOW"; then
-        echo "  ✓ Port ${nginx_external_port}/tcp already allowed"
-    else
-        ufw allow "${nginx_external_port}/tcp" comment 'Nginx VLESS+Reverse Proxy (v5.30)' || {
-            echo -e "${YELLOW}Warning: Failed to add UFW rule${NC}"
-        }
-        echo "  ✓ Port ${nginx_external_port}/tcp allowed"
-    fi
-
     # v4.3: Ensure ports 9443-9452 are NOT exposed (localhost-only nginx backends)
     echo "  Verifying nginx backend ports (9443-9452) are NOT exposed..."
     local exposed_nginx_ports=()
@@ -1389,8 +1367,11 @@ deploy_containers() {
     [[ ! -f "${NGINX_CONFIG}" ]] && missing_files+=("${NGINX_CONFIG}")
     [[ ! -f "${DOCKER_COMPOSE_FILE}" ]] && missing_files+=("${DOCKER_COMPOSE_FILE}")
     [[ ! -f "${ENV_FILE}" ]] && missing_files+=("${ENV_FILE}")
-    [[ ! -f "${KEYS_DIR}/private.key" ]] && missing_files+=("${KEYS_DIR}/private.key")
-    [[ ! -f "${KEYS_DIR}/public.key" ]] && missing_files+=("${KEYS_DIR}/public.key")
+    if [[ ${FT_SERVICE_MODE:-both} != proxy ]]; then
+        [[ ! -f "${KEYS_DIR}/private.key" ]] && missing_files+=("${KEYS_DIR}/private.key")
+        [[ ! -f "${KEYS_DIR}/public.key" ]] && missing_files+=("${KEYS_DIR}/public.key")
+
+    fi
 
     # v5.30: nginx config generated via lib/nginx_stream_generator.sh (called from create_nginx_config)
 
@@ -1409,6 +1390,10 @@ deploy_containers() {
         echo -e "${RED}Failed to change to ${INSTALL_ROOT}${NC}" >&2
         return 1
     }
+
+    if [[ -n ${FT_SERVICE_MODE-} ]]; then
+        check_selected_ports || return 1
+    fi
 
     # Pull a prebuilt image. Reconciliation itself never pulls or builds.
     echo "  Pulling Docker images..."
@@ -1479,6 +1464,8 @@ deploy_containers() {
         docker compose logs familytraffic
         return 1
     fi
+
+    docker exec familytraffic /etc/familytraffic/healthcheck.sh || return 1
 
     echo -e "${GREEN}✓ Containers deployed successfully${NC}"
     return 0
@@ -1594,6 +1581,7 @@ install_cli_tools() {
     local copied_count=0
     local skipped_count=0
 
+    install -m 644 "$project_root/lib/service_settings.py" "${INSTALL_ROOT}/lib/service_settings.py" || return 1
     # Copy all *.sh files from lib/
     for lib_file in "${project_root}/lib/"*.sh; do
         local module=$(basename "$lib_file")

@@ -84,6 +84,7 @@ setup() {
         source <(sed '\''$d'\'' "$1")
         print_banner() { :; }
         check_root() { :; }
+        check_fresh_installation() { :; }
         source_libraries() { :; }
         detect_os() { :; }
         validate_os() { :; }
@@ -91,6 +92,8 @@ setup() {
         check_dependencies() { return 0; }
         install_dependencies() { :; }
         detect_old_installation() { OLD_INSTALL_FOUND=false; }
+        select_service_mode() { :; }
+        check_selected_ports() { :; }
         collect_parameters() { ENABLE_PUBLIC_PROXY=true; ENABLE_PROXY_TLS=true; }
         ufw() { printf "Status: inactive\n"; }
         configure_install_firewall() { return 1; }

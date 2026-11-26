@@ -275,6 +275,14 @@ cmd_setup() {
         return 1
     fi
 
+    local service_port
+    for service_port in "${FT_VLESS_PUBLIC_PORT-}" "${FT_HTTPS_PROXY_PORT-}" "${FT_SOCKS_TLS_PORT-}" "${FT_HTTP_PLAIN_PORT-}" "${FT_SOCKS_PLAIN_PORT-}"; do
+        if [[ $service_port == 2053 || $service_port == 4443 ]]; then
+            log_error "MTProxy port $service_port is assigned to an installed service"
+            return 1
+        fi
+    done
+
     # Ensure config dir and secrets.json are initialized
     if ! mtproxy_init; then
         log_error "Failed to initialize MTProxy directory structure"
@@ -868,6 +876,12 @@ main() {
 
     local command="${1:-help}"
     shift || true
+
+    case "$command" in
+        setup|disable)
+            source "$LIB_DIR/service_modes.sh"
+            load_service_settings "$FAMILYTRAFFIC_HOME" || return 1 ;;
+    esac
 
     # setup and help commands do NOT require prior installation
     case "$command" in
