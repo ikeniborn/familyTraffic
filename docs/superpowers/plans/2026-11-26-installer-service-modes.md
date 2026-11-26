@@ -12,6 +12,13 @@ review:
     verifiability: { status: passed }
     consistency: { status: passed }
   findings: []
+result_check:
+  verdict: needs_work
+  source: plan
+  plan_hash: 747a0296f0e1f168
+  last_run: 2026-11-26
+  reviewed: true
+  docs_checked: true
 ---
 # Installer service modes implementation plan
 
