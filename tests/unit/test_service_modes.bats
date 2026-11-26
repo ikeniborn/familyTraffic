@@ -254,3 +254,19 @@ ENV
     [ "$status" -eq 0 ]
     [[ "$output" != *'listen 80 '* ]]
 }
+
+@test "combined browser route preserves Reality and refuses an overlapping server name" {
+    source "$BATS_TEST_DIRNAME/../../lib/nginx_stream_generator.sh"
+    export FT_SERVICE_MODE=both FT_VLESS_PUBLIC_PORT=443 FT_HTTPS_PROXY_PORT=8118
+    export XRAY_CONFIG="$root/config/xray_config.json"
+    echo '{"inbounds":[{"tag":"vless-reality","streamSettings":{"realitySettings":{"serverNames":["vpn.test","Alt.test"]}}}]}' > "$XRAY_CONFIG"
+    run generate_nginx_config service.test
+    [ "$status" = 0 ]
+    [[ $output == *'service.test unix:/run/familytraffic-landing.sock;'* ]]
+    [[ $output == *'default             127.0.0.1:8443;'* ]]
+    run generate_nginx_config alt.test
+    [ "$status" != 0 ]
+    [[ $output == *'alt.test'* ]]
+    run generate_nginx_config service.test true service.test
+    [ "$status" != 0 ]
+}

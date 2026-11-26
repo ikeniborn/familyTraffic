@@ -1581,6 +1581,7 @@ install_cli_tools() {
     local copied_count=0
     local skipped_count=0
 
+    install -m 644 "$project_root/lib/landing_config.py" "${INSTALL_ROOT}/lib/landing_config.py" || return 1
     install -m 644 "$project_root/lib/service_settings.py" "${INSTALL_ROOT}/lib/service_settings.py" || return 1
     # Copy all *.sh files from lib/
     for lib_file in "${project_root}/lib/"*.sh; do
