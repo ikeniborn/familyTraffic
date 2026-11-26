@@ -53,6 +53,32 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/traffic_monitoring.sh"
 NGINX_CONF="${NGINX_CONF:-/opt/familytraffic/config/nginx/nginx.conf}"
 
 
+render_proxy_listeners() {
+    local cert_path=$1 notls=$2 port backend tls endpoint
+    local socks=${FT_SOCKS_TLS_PORT-1080} https=${FT_HTTPS_PROXY_PORT-8118}
+    local socks_plain=${FT_SOCKS_PLAIN_PORT-1081} http_plain=${FT_HTTP_PLAIN_PORT-8119}
+    local endpoints=("$socks:10800:ssl" "$https:18118:ssl")
+    if [[ $notls == true || ${FT_LEGACY_SERVICE_SETTINGS:-false} == true ]]; then
+        endpoints+=("$socks_plain:10800:" "$http_plain:18118:")
+    fi
+    for endpoint in "${endpoints[@]}"; do
+        IFS=: read -r port backend tls <<< "$endpoint"
+        [[ -n $port ]] || continue
+        echo "    server {"
+        echo "        listen ${port}${tls:+ ssl};"
+        if [[ -n $tls ]]; then
+            echo "        ssl_certificate     ${cert_path}/fullchain.pem;"
+            echo "        ssl_certificate_key ${cert_path}/privkey.pem;"
+            echo "        ssl_protocols       TLSv1.3;"
+        fi
+        echo "        proxy_pass          127.0.0.1:${backend};"
+        echo "        proxy_protocol on;"
+        echo "        proxy_connect_timeout 10s;"
+        echo "        proxy_timeout 300s;"
+        echo "    }"
+    done
+}
+
 generate_nginx_config() {
     local cert_domain="${1}"
     local enable_tier2="${2:-false}"
@@ -63,7 +89,7 @@ generate_nginx_config() {
     local enable_notls
     enable_notls=$(resolve_proxy_notls "${7-}" "${VLESS_DIR:-/opt/familytraffic}/.env") || return 1
 
-    if [[ -z "$cert_domain" ]]; then
+    if [[ -z "$cert_domain" && ( -z ${FT_SERVICE_MODE-} || -n ${FT_HTTPS_PROXY_PORT-}${FT_SOCKS_TLS_PORT-} || $enable_tier2 == true || $enable_mtproxy_cloak == true ) ]]; then
         echo "ERROR: generate_nginx_config requires cert_domain as \$1" >&2
         return 1
     fi
@@ -98,11 +124,20 @@ stream {
     error_log /var/log/nginx/stream_error.log warn;
 
 $(if [[ "${_traffic_monitoring}" == "true" ]]; then
+    echo '    map $server_port $traffic_service {'
+    echo '        default unknown;'
+    local mapping
+    for mapping in "${FT_VLESS_PUBLIC_PORT-443}:vless-front" "${FT_HTTPS_PROXY_PORT-8118}:https" "${FT_SOCKS_TLS_PORT-1080}:socks5s" "${FT_HTTP_PLAIN_PORT-8119}:http" "${FT_SOCKS_PLAIN_PORT-1081}:socks5"; do
+        [[ -n ${mapping%:*} ]] && printf '        %s %s;\n' "${mapping%:*}" "${mapping#*:}"
+    done
+    echo '    }'
     cat <<'TRAFFIC_LOG'
-    log_format traffic escape=json '{"time":"$time_iso8601","listener":"$server_port","client_ip":"$remote_addr","status":"$status","duration":$session_time,"received":$bytes_received,"sent":$bytes_sent}';
+    log_format traffic escape=json '{"time":"$time_iso8601","listener":"$server_port","service":"$traffic_service","client_ip":"$remote_addr","status":"$status","duration":$session_time,"received":$bytes_received,"sent":$bytes_sent}';
     access_log /var/log/nginx/traffic.log traffic;
 TRAFFIC_LOG
 fi)
+$(if [[ -z ${FT_SERVICE_MODE-} || -n ${FT_VLESS_PUBLIC_PORT-} ]]; then
+cat <<VPN_BLOCK
     # SNI map: Tier 2 subdomains → loopback http block; Reality → Xray passthrough
     map \$ssl_preread_server_name \$backend_addr {
 $(if [[ -n "$ws_subdomain" ]]; then
@@ -122,7 +157,7 @@ fi)
     # ssl_preread reads SNI without decrypting TLS — preserves Reality handshake
     # -------------------------------------------------------------------------
     server {
-        listen 443;
+        listen ${FT_VLESS_PUBLIC_PORT:-443};
         ssl_preread on;
         proxy_pass \$backend_addr;
         proxy_connect_timeout 10s;
@@ -130,60 +165,10 @@ fi)
     }
 
     # -------------------------------------------------------------------------
-    # Port 1080: SOCKS5 with TLS termination (replaces HAProxy frontend socks5_tls)
-    # TLS terminated here; plaintext forwarded to 127.0.0.1:10800
-    # -------------------------------------------------------------------------
-    server {
-        listen 1080 ssl;
-        ssl_certificate     ${cert_path}/fullchain.pem;
-        ssl_certificate_key ${cert_path}/privkey.pem;
-        ssl_protocols       TLSv1.3;
-        proxy_pass          127.0.0.1:10800;
-        proxy_protocol on;
-        proxy_connect_timeout 10s;
-        proxy_timeout        300s;
-    }
-
-    # -------------------------------------------------------------------------
-    # Port 8118: HTTP proxy with TLS termination (replaces HAProxy frontend http_tls)
-    # TLS terminated here; plaintext forwarded to 127.0.0.1:18118
-    # -------------------------------------------------------------------------
-    server {
-        listen 8118 ssl;
-        ssl_certificate     ${cert_path}/fullchain.pem;
-        ssl_certificate_key ${cert_path}/privkey.pem;
-        ssl_protocols       TLSv1.3;
-        proxy_pass          127.0.0.1:18118;
-        proxy_protocol on;
-        proxy_connect_timeout 10s;
-        proxy_timeout        300s;
-    }
-$(if [[ "${enable_notls}" == "true" ]]; then
-cat <<'NOTLS_BLOCK'
-
-    # -------------------------------------------------------------------------
-    # Port 1081: SOCKS5 without TLS (plaintext, credentials transmitted in cleartext!)
-    # -------------------------------------------------------------------------
-    server {
-        listen 1081;
-        proxy_pass 127.0.0.1:10800;
-        proxy_protocol on;
-        proxy_connect_timeout 10s;
-        proxy_timeout 300s;
-    }
-
-    # -------------------------------------------------------------------------
-    # Port 8119: HTTP proxy without TLS (plaintext, credentials transmitted in cleartext!)
-    # -------------------------------------------------------------------------
-    server {
-        listen 8119;
-        proxy_pass 127.0.0.1:18118;
-        proxy_protocol on;
-        proxy_connect_timeout 10s;
-        proxy_timeout 300s;
-    }
-NOTLS_BLOCK
+VPN_BLOCK
 fi)
+$(render_proxy_listeners "$cert_path" "$enable_notls")
+
 }
 
 # =============================================================================
@@ -194,6 +179,8 @@ http {
     access_log ${_nginx_access_log};
     error_log  /var/log/nginx/error.log warn;
 
+$(if [[ -z ${FT_SERVICE_MODE-} || $enable_tier2 == true ]]; then
+cat <<DEFAULT_BLOCK
     # Default server — reject unknown hosts (active probing protection)
     server {
         listen 8448 ssl default_server;
@@ -204,6 +191,8 @@ http {
         server_name         _;
         return 444;
     }
+DEFAULT_BLOCK
+fi)
 $(if [[ -n "$ws_subdomain" ]]; then
 cat <<WS_BLOCK
 
@@ -293,6 +282,8 @@ fi)
     # -------------------------------------------------------------------------
     # Port 80: ACME HTTP-01 challenge (certbot webroot renewal)
     # -------------------------------------------------------------------------
+$(if [[ -n $cert_domain ]]; then
+cat <<ACME_BLOCK
     server {
         listen 80 default_server;
         server_name _;
@@ -307,6 +298,8 @@ fi)
             return 301 https://\$host\$request_uri;
         }
     }
+ACME_BLOCK
+fi)
 }
 EOF
 }

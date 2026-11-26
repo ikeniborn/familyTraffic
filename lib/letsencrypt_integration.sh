@@ -35,7 +35,7 @@ set -euo pipefail
 # Configuration
 # ==============================================================================
 
-readonly CERTBOT_WEBROOT="/var/www/certbot"
+readonly CERTBOT_WEBROOT="/var/www/html"
 readonly LETSENCRYPT_DIR="/etc/letsencrypt/live"
 
 # Flag to track if we opened port 80 (used for cleanup)
@@ -175,25 +175,7 @@ renew_certificate() {
 # Returns: 0 on success, 1 on failure
 # ==============================================================================
 ensure_certbot_webroot() {
-    if [[ ! -d "$CERTBOT_WEBROOT" ]]; then
-        echo "Creating certbot webroot directory: $CERTBOT_WEBROOT"
-        if ! mkdir -p "$CERTBOT_WEBROOT" 2>/dev/null; then
-            echo "Error: Failed to create $CERTBOT_WEBROOT" >&2
-            return 1
-        fi
-    fi
-
-    # Ensure proper permissions (755 = rwxr-xr-x)
-    # This allows certbot (running as root) to write, and nginx to read
-    chmod 755 "$CERTBOT_WEBROOT" 2>/dev/null || true
-
-    # Verify directory exists and is readable (write permission not required here)
-    if [[ ! -d "$CERTBOT_WEBROOT" ]] || [[ ! -r "$CERTBOT_WEBROOT" ]]; then
-        echo "Error: $CERTBOT_WEBROOT is not accessible" >&2
-        return 1
-    fi
-
-    return 0
+    mkdir -p "$CERTBOT_WEBROOT/.well-known/acme-challenge"
 }
 
 # ==============================================================================
@@ -219,7 +201,7 @@ open_port_80_for_certbot() {
     fi
 
     # Check if port 80 is already allowed
-    if ufw status numbered | grep -qE "80/tcp.*ALLOW"; then
+    if ufw status numbered | grep -qE "^\[ *[0-9]+\] +80/tcp( |$).*ALLOW"; then
         echo "Port 80 already allowed in UFW"
         PORT_80_OPENED_BY_US=false
         return 0
@@ -266,20 +248,12 @@ close_port_80_for_certbot() {
 
     echo "Closing temporary port 80 in UFW..."
 
-    # Find and delete the rule we added (match by comment)
-    local rule_number
-    rule_number=$(ufw status numbered | grep "ACME HTTP-01 challenge" | grep -oP '^\[\s*\K[0-9]+' | head -1)
-
-    if [[ -n "$rule_number" ]]; then
-        # Delete by rule number (requires 'yes' confirmation)
-        echo "y" | ufw delete "$rule_number" >/dev/null 2>&1 || true
-        echo "✓ Port 80 closed in UFW"
-    else
-        # Fallback: delete by specification
-        ufw delete allow 80/tcp >/dev/null 2>&1 || true
-        echo "✓ Port 80 closed in UFW (fallback method)"
-    fi
-
+    local rules number
+    rules=$(LC_ALL=C ufw status numbered) || return 1
+    while read -r number; do
+        [[ -n $number ]] || continue
+        ufw --force delete "$number" || return 1
+    done < <(sed -nE 's/^\[ *([0-9]+)\] +80\/tcp .*# ACME HTTP-01 challenge$/\1/p' <<< "$rules" | sort -rn)
     PORT_80_OPENED_BY_US=false
     return 0
 }
@@ -291,109 +265,16 @@ close_port_80_for_certbot() {
 # Returns: 0 on success, 1 on failure
 # ==============================================================================
 start_certbot_nginx() {
-    local container_name="certbot_nginx"
-
-    # Check if container already exists and is running
-    if docker ps --format '{{.Names}}' | grep -q "^${container_name}$"; then
-        echo "Certbot nginx container already running"
-        return 0
-    fi
-
-    # Remove existing stopped container if present
-    if docker ps -a --format '{{.Names}}' | grep -q "^${container_name}$"; then
-        echo "Removing existing certbot nginx container..."
-        docker rm -f "$container_name" >/dev/null 2>&1 || true
-    fi
-
-    # Check if port 80 is available; attempt to free it automatically
-    if ss -tulnp | grep -q ":80 "; then
-        echo "Port 80 is in use, attempting to free it..."
-
-        # Try to stop known services that commonly occupy port 80
-        local freed=false
-
-        # 1. Check for Docker containers binding to port 80
-        local container_on_80
-        container_on_80=$(docker ps --format '{{.Names}}' --filter "publish=80" 2>/dev/null || true)
-        if [[ -z "$container_on_80" ]]; then
-            # Also check host-network containers listening on 80
-            container_on_80=$(docker ps -q 2>/dev/null | while read -r cid; do
-                if docker inspect "$cid" --format '{{.HostConfig.NetworkMode}}' 2>/dev/null | grep -q "host"; then
-                    docker inspect "$cid" --format '{{.Name}}' 2>/dev/null | sed 's|^/||'
-                fi
-            done || true)
-        fi
-        if [[ -n "$container_on_80" ]]; then
-            echo "  Stopping Docker container(s) on port 80: $container_on_80"
-            for c in $container_on_80; do
-                docker stop "$c" >/dev/null 2>&1 || true
-            done
-            sleep 1
-            if ! ss -tulnp | grep -q ":80 "; then
-                freed=true
-            fi
-        fi
-
-        # 2. Check for system nginx
-        if [[ "$freed" != "true" ]] && systemctl is-active nginx &>/dev/null; then
-            echo "  Stopping system nginx..."
-            systemctl stop nginx 2>/dev/null || true
-            sleep 1
-            if ! ss -tulnp | grep -q ":80 "; then
-                freed=true
-            fi
-        fi
-
-        # 3. Check for system apache2/httpd
-        if [[ "$freed" != "true" ]]; then
-            for svc in apache2 httpd; do
-                if systemctl is-active "$svc" &>/dev/null; then
-                    echo "  Stopping $svc..."
-                    systemctl stop "$svc" 2>/dev/null || true
-                    sleep 1
-                    if ! ss -tulnp | grep -q ":80 "; then
-                        freed=true
-                        break
-                    fi
-                fi
-            done
-        fi
-
-        # 4. Last resort: identify and kill the process
-        if [[ "$freed" != "true" ]]; then
-            local pid_on_80
-            pid_on_80=$(ss -tulnp | grep ":80 " | grep -oP 'pid=\K[0-9]+' | head -1)
-            if [[ -n "$pid_on_80" ]]; then
-                local proc_name
-                proc_name=$(ps -p "$pid_on_80" -o comm= 2>/dev/null || echo "unknown")
-                echo "  Killing process $proc_name (PID $pid_on_80) on port 80..."
-                kill "$pid_on_80" 2>/dev/null || true
-                sleep 2
-                # Force kill if still alive
-                if kill -0 "$pid_on_80" 2>/dev/null; then
-                    kill -9 "$pid_on_80" 2>/dev/null || true
-                    sleep 1
-                fi
-                if ! ss -tulnp | grep -q ":80 "; then
-                    freed=true
-                fi
-            fi
-        fi
-
-        if [[ "$freed" != "true" ]]; then
-            echo "Error: Could not free port 80" >&2
-            echo "Manually stop the service using port 80 and try again" >&2
-            return 1
-        fi
-        echo "✓ Port 80 freed successfully"
+    if ss -H -ltn 'sport = :80' | grep -q .; then
+        echo "TCP port 80 is in use. Certificate acquisition requires a free listener." >&2
+        return 1
     fi
 
     echo "Starting certbot nginx container on port 80..."
-    if ! docker run -d \
-        --name "$container_name" \
+    if ! acme_container_id=$(docker run -d \
         --network host \
-        -v "$CERTBOT_WEBROOT:/usr/share/nginx/html:ro" \
-        nginx:alpine >/dev/null 2>&1; then
+        -v "$CERTBOT_WEBROOT/.well-known/acme-challenge:/usr/share/nginx/html/.well-known/acme-challenge:ro" \
+        nginx:alpine); then
         echo "Error: Failed to start certbot nginx container" >&2
         return 1
     fi
@@ -417,13 +298,9 @@ start_certbot_nginx() {
 # Returns: 0 on success (always succeeds)
 # ==============================================================================
 stop_certbot_nginx() {
-    local container_name="certbot_nginx"
-
-    if docker ps --format '{{.Names}}' | grep -q "^${container_name}$"; then
-        echo "Stopping certbot nginx container..."
-        docker stop "$container_name" >/dev/null 2>&1 || true
-        docker rm "$container_name" >/dev/null 2>&1 || true
-        echo "✓ Certbot nginx stopped"
+    if [[ -n ${acme_container_id-} ]]; then
+        docker rm -f "$acme_container_id" >/dev/null || return 1
+        acme_container_id=
     fi
 
     return 0
@@ -438,7 +315,8 @@ stop_certbot_nginx() {
 #   $2 - email (optional, uses --register-unsafely-without-email if empty)
 # Returns: 0 on success, 1 on failure
 # ==============================================================================
-acquire_certificate() {
+acquire_certificate() (
+    local acme_container_id=""
     local domain="$1"
     local email="${2:-}"
 
@@ -463,9 +341,8 @@ acquire_certificate() {
         return 1
     fi
 
-    # Step 2: Open port 80 in UFW (if needed)
-    echo ""
-    if ! open_port_80_for_certbot; then
+    # New lineages open the challenge window through their Certbot pre-hook.
+    if [[ -z ${FT_SERVICE_MODE:-} ]] && ! open_port_80_for_certbot; then
         echo "Warning: Failed to open port 80 in UFW, continuing anyway..." >&2
     fi
 
@@ -477,34 +354,30 @@ acquire_certificate() {
     fi
 
     # Prepare certbot command
-    local certbot_cmd="certbot certonly --webroot -w $CERTBOT_WEBROOT -d $domain --non-interactive --agree-tos"
+    local certbot_cmd=(certbot certonly --webroot -w "$CERTBOT_WEBROOT" -d "$domain" --non-interactive --agree-tos)
+
+    if [[ -n ${FT_SERVICE_MODE:-} ]]; then
+        local hook=/usr/local/lib/familytraffic/acme-hook
+        certbot_cmd+=(--cert-name "$domain" --pre-hook "$hook open" --post-hook "$hook close" --deploy-hook "$hook reload")
+    fi
 
     if [[ -n "$email" ]]; then
-        certbot_cmd+=" --email $email"
+        certbot_cmd+=(--email "$email")
     else
-        certbot_cmd+=" --register-unsafely-without-email"
+        certbot_cmd+=(--register-unsafely-without-email)
     fi
 
     # Step 4: Acquire certificate
     echo ""
     echo "Running certbot to acquire certificate..."
     local certbot_result=0
-    if ! eval "$certbot_cmd" 2>&1; then
+    if ! "${certbot_cmd[@]}" 2>&1; then
         echo "Error: Failed to acquire certificate for $domain" >&2
         certbot_result=1
     fi
 
-    # Explicitly stop certbot nginx and close port 80 before returning.
-    # NOTE: trap cleanup EXIT fires on shell exit, NOT on function return —
-    # so without this explicit call the certbot_nginx container stays alive
-    # and blocks port 80 when the familytraffic container's nginx tries to bind it.
-    echo ""
-    stop_certbot_nginx
-    close_port_80_for_certbot
-    trap - EXIT
-
-    return $certbot_result
-}
+    return "$certbot_result"
+)
 
 # ==============================================================================
 # Function: validate_dns_for_domain

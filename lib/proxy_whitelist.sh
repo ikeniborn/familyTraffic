@@ -39,12 +39,13 @@ set -euo pipefail
 # CLI having loaded common.sh first; the guard inside makes it idempotent.
 # shellcheck source=lib/common.sh
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
+source "$(dirname "${BASH_SOURCE[0]}")/proxy_security.sh"
 
 # ============================================================================
 # Global Variables (conditional to avoid conflicts when sourced by CLI)
 # ============================================================================
 
-readonly PROXY_IPS_FILE="/opt/familytraffic/config/proxy_allowed_ips.json"
+PROXY_IPS_FILE="${PROXY_IPS_FILE:-/opt/familytraffic/config/proxy_allowed_ips.json}"
 [[ -z "${XRAY_CONFIG:-}" ]] && readonly XRAY_CONFIG="/opt/familytraffic/config/xray_config.json"
 [[ -z "${LOCK_FILE:-}" ]] && readonly LOCK_FILE="/var/lock/familytraffic_proxy_ips.lock"
 
@@ -482,7 +483,7 @@ show_proxy_allowed_ips() {
     echo ""
     echo "═══════════════════════════════════════════════════════"
     echo ""
-    echo "These IPs can connect to SOCKS5 (1080) and HTTP (8118) proxies."
+    echo "Selected public proxy ports: $(proxy_auth_ports "${PROXY_NOTLS_ENABLED:-false}")"
     echo "Connections from other IPs will be blocked."
     echo ""
     echo "Note: This is a server-level whitelist (applies to all proxy users)."
@@ -514,55 +515,26 @@ regenerate_proxy_routing() {
     local allowed_ips
     allowed_ips=$(jq -c '.allowed_ips // ["127.0.0.1"]' "$PROXY_IPS_FILE" 2>/dev/null)
 
-    # Build routing rules (NO user field, only source)
-    # NOTE: In v4.3+ HAProxy architecture, blocking rule is removed because:
-    #       - Ports 10800/18118 NOT exposed publicly (HAProxy terminates TLS)
-    #       - Docker network provides isolation
-    #       - HAProxy connects from Docker network IP (not 127.0.0.1)
-    #       - Blocking rule would break HAProxy → Xray proxy connections
-    local routing_rules
-    routing_rules=$(jq -n \
-        --argjson source "$allowed_ips" \
-        '[
-            {
-                type: "field",
-                inboundTag: ["socks5-proxy", "http-proxy"],
-                source: $source,
-                outboundTag: "direct"
-            }
-        ]')
-
-    # Build complete routing object
-    local routing_json
-    routing_json=$(jq -n \
-        --argjson rules "$routing_rules" \
-        '{
-            domainStrategy: "AsIs",
-            rules: $rules
-        }')
-
-    # Create backup
-    cp "$XRAY_CONFIG" "${XRAY_CONFIG}.bak.$$"
-
-    # Update routing section
-    local temp_file="${XRAY_CONFIG}.tmp.$$"
-    if ! jq --argjson routing "$routing_json" '.routing = $routing' "$XRAY_CONFIG" > "$temp_file"; then
-        log_error "Failed to update routing rules"
+    local tags pending=false temp_file
+    tags=$(proxy_receiver_tags)
+    [[ $tags != '[]' ]] || { log_error "Public proxies are disabled"; return 1; }
+    if proxy_config_is_pending "$XRAY_CONFIG"; then pending=true; fi
+    temp_file=$(mktemp) || return 1
+    if ! jq --argjson tags "$tags" --argjson hosts "$allowed_ips" --argjson pending "$pending" '
+        def generated: ((.inboundTag // []) | sort) == $tags and .type == "field" and
+            ((.outboundTag == "direct" and ((keys - ["inboundTag","outboundTag","source","type"]) == []))
+              or . == {type:"field",inboundTag:$tags,outboundTag:"blocked"});
+        if any(.outbounds[]; .tag == "blocked" and .protocol == "blackhole") then . else error("missing blocked outbound") end |
+        .routing.rules |= ((. // []) as $rules |
+            (if $pending then [$rules[0]] else [] end) +
+            [{type:"field",inboundTag:$tags,source:$hosts,outboundTag:"direct"},
+             {type:"field",inboundTag:$tags,outboundTag:"blocked"}] +
+            ($rules | map(select(generated | not))))
+    ' "$XRAY_CONFIG" > "$temp_file" || ! validate_proxy_auth_config "$temp_file"; then
         rm -f "$temp_file"
         return 1
     fi
-
-    # Validate JSON
-    if ! jq empty "$temp_file" 2>/dev/null; then
-        log_error "Generated invalid Xray configuration"
-        rm -f "$temp_file"
-        write_preserving_inode "${XRAY_CONFIG}.bak.$$" "$XRAY_CONFIG"
-        return 1
-    fi
-
-    # Apply changes — write preserving inode (required for Docker bind mounts)
-    write_preserving_inode "$temp_file" "$XRAY_CONFIG"
-    rm -f "${XRAY_CONFIG}.bak.$$"
+    write_preserving_inode "$temp_file" "$XRAY_CONFIG" || return 1
 
     local ip_count
     ip_count=$(echo "$allowed_ips" | jq 'length')

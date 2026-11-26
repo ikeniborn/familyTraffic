@@ -93,6 +93,7 @@ func Parse(source, line string, now time.Time) ([]Event, error) {
 	case "nginx":
 		var n struct {
 			Listener string  `json:"listener"`
+			Service  *string `json:"service"`
 			Status   string  `json:"status"`
 			Received float64 `json:"received"`
 			Sent     float64 `json:"sent"`
@@ -105,6 +106,14 @@ func Parse(source, line string, now time.Time) ([]Event, error) {
 		}
 		labels := map[string]string{"443": "vless-front", "1080": "socks5s", "8118": "https", "1081": "socks5", "8119": "http"}
 		listener, ok := labels[n.Listener]
+		if n.Service != nil {
+			switch *n.Service {
+			case "vless-front", "socks5s", "https", "socks5", "http":
+				listener, ok = *n.Service, true
+			default:
+				return nil, nil
+			}
+		}
 		if !ok {
 			return nil, nil
 		}

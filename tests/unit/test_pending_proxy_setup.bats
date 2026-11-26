@@ -55,7 +55,7 @@ JSON
     log_info() { :; }; log_success() { :; }; log_error() { :; }; log_warning() { :; }
     apply_per_user_routing
     proxy_config_is_pending "$XRAY_CONFIG"
-    jq -e '.routing.rules[1].inboundTag == ["vless-reality"]' "$XRAY_CONFIG"
+    jq -e '.routing.rules[1:] | any(.inboundTag == ["vless-reality"]) and any(.domain == ["example.com"])' "$XRAY_CONFIG"
 }
 
 @test "installer generates selected proxy configuration without a saved user" {

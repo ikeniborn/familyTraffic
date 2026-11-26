@@ -60,3 +60,12 @@ setup() {
     [ ! -s "$trace" ]
     cmp "$rules" "$BATS_TEST_TMPDIR/before"
 }
+
+@test "custom port check uses the UFW destination and detects an overlapping range" {
+    export FT_SERVICE_MODE=proxy FT_HTTPS_PROXY_PORT=123 FT_SOCKS_TLS_PORT= FT_HTTP_PLAIN_PORT= FT_SOCKS_PLAIN_PORT=
+    echo '[123] 22/tcp ALLOW IN 192.0.2.123 # operator' > "$rules"
+    validate_proxy_firewall false
+    echo '[  2] 120:130/tcp ALLOW IN Anywhere # operator' >> "$rules"
+    run validate_proxy_firewall false
+    [ "$status" -ne 0 ]
+}

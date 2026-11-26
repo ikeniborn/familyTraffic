@@ -22,9 +22,7 @@ set -euo pipefail
 # shellcheck source=lib/common.sh
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 
-# Proxy ports
-readonly SOCKS5_PORT=1080
-readonly HTTP_PORT=8118
+source "$(dirname "${BASH_SOURCE[0]}")/proxy_security.sh"
 
 # UFW rule comment prefix
 readonly UFW_COMMENT_PREFIX="VLESS proxy whitelist"
@@ -134,34 +132,13 @@ add_ufw_proxy_rule() {
         return 1
     fi
 
-    # Check if rule already exists
-    if ufw status numbered | grep -q "# ${UFW_COMMENT_PREFIX}: ${ip}"; then
-        log_ufw_warning "UFW rule already exists for $ip"
-        return 0
-    fi
-
-    # Add rules for both SOCKS5 and HTTP ports
-    local errors=0
-
-    # SOCKS5 port (1080)
-    if ! ufw allow from "$ip" to any port "$SOCKS5_PORT" proto tcp comment "${UFW_COMMENT_PREFIX}: ${ip} SOCKS5" &>/dev/null; then
-        log_ufw_error "Failed to add UFW rule for SOCKS5 port ($SOCKS5_PORT)"
-        ((errors++))
-    fi
-
-    # HTTP port (8118)
-    if ! ufw allow from "$ip" to any port "$HTTP_PORT" proto tcp comment "${UFW_COMMENT_PREFIX}: ${ip} HTTP" &>/dev/null; then
-        log_ufw_error "Failed to add UFW rule for HTTP port ($HTTP_PORT)"
-        ((errors++))
-    fi
-
-    if [[ $errors -eq 0 ]]; then
-        log_ufw_success "Added UFW rules for $ip (ports $SOCKS5_PORT, $HTTP_PORT)"
-        return 0
-    else
-        log_ufw_error "Failed to add some UFW rules for $ip"
-        return 1
-    fi
+    local ports port
+    ports=$(proxy_auth_ports "${PROXY_NOTLS_ENABLED:-false}") || return 1
+    [[ -n $ports ]] || { log_ufw_error 'No public proxies selected'; return 1; }
+    for port in ${ports//,/ }; do
+        ufw allow from "$ip" to any port "$port" proto tcp comment "${UFW_COMMENT_PREFIX}: ${ip} TCP" || return 1
+    done
+    log_ufw_success "Allowed $ip on TCP ports $ports"
 }
 
 #
@@ -290,8 +267,7 @@ show_ufw_proxy_ips() {
     fi
 
     echo -e "${CYAN}Ports Protected:${NC}"
-    echo "  • SOCKS5: $SOCKS5_PORT/tcp"
-    echo "  • HTTP:   $HTTP_PORT/tcp"
+    proxy_auth_ports "${PROXY_NOTLS_ENABLED:-false}"
     echo ""
 
     echo -e "${CYAN}Management Commands:${NC}"

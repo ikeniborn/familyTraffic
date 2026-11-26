@@ -160,9 +160,10 @@ verify_directory_structure() {
         "$VLESS_HOME/config/xray_config.json"
         "$VLESS_HOME/config/nginx/nginx.conf"
         "$VLESS_HOME/data/users.json"
-        "$VLESS_HOME/keys/private.key"
-        "$VLESS_HOME/keys/public.key"
     )
+    if [[ ${FT_SERVICE_MODE:-both} != proxy ]]; then
+        required_files+=("$VLESS_HOME/keys/private.key" "$VLESS_HOME/keys/public.key")
+    fi
 
     local missing_files=()
 
@@ -390,6 +391,15 @@ verify_xray_config() {
         echo "$error_output" | sed 's/^/    /'
     fi
 
+    if [[ ${FT_SERVICE_MODE:-both} == proxy ]]; then
+        if jq -e 'any(.inbounds[]; .protocol == "vless")' "$config_file" >/dev/null; then
+            log_error "Unexpected VLESS receiver in proxy-only mode"
+            return 1
+        fi
+        validate_proxy_auth_config "$config_file"
+        return
+    fi
+
     # Verify critical configuration elements
     local protocol=$(jq -r '.inbounds[0].protocol' "$config_file" 2>/dev/null || echo "")
     if [[ "$protocol" == "vless" ]]; then
@@ -445,26 +455,14 @@ verify_ufw_rules() {
         return 0
     fi
 
-    # Check VLESS port rule (v5.33: Nginx stream on 443, Xray on 8443 internal)
-    local vless_port=$(jq -r '.inbounds[0].port' "$VLESS_HOME/config/xray_config.json" 2>/dev/null || echo "8443")
-
-    # In v5.33: Port 443 must be in UFW (Nginx stream frontend), port 8443 is internal
-    if [[ "$vless_port" == "8443" ]]; then
-        # v5.33 architecture: Check port 443 (Nginx stream) instead
-        if ufw status numbered | grep -q "443/tcp.*ALLOW"; then
-            log_success "UFW allows port 443/tcp (Nginx stream frontend)"
-            log_info "  Port 8443 is internal (Nginx → Xray, not in UFW) - expected for v5.33"
-        else
-            log_error "UFW does not allow port 443/tcp (required for Nginx stream)"
+    local rules port
+    rules=$(ufw status numbered) || return 1
+    for port in "${FT_VLESS_PUBLIC_PORT-443}" "${FT_HTTPS_PROXY_PORT-}" "${FT_SOCKS_TLS_PORT-}" "${FT_HTTP_PLAIN_PORT-}" "${FT_SOCKS_PLAIN_PORT-}"; do
+        [[ -n $port ]] || continue
+        if ! grep -Eq "(^|] *)${port}/tcp[[:space:]]+ALLOW" <<< "$rules"; then
+            log_error "Missing UFW grant for selected port $port"
         fi
-    else
-        # Legacy architecture or custom port
-        if ufw status numbered | grep -q "${vless_port}/tcp.*ALLOW"; then
-            log_success "UFW allows port $vless_port/tcp"
-        else
-            log_error "UFW does not allow port $vless_port/tcp"
-        fi
-    fi
+    done
 
     # Check Docker forwarding rules in after.rules
     # v5.33: marker changed to "FAMILYTRAFFIC DOCKER FORWARDING RULES"
@@ -583,34 +581,17 @@ verify_container_internet() {
 verify_port_listening() {
     log_info "Verification 8/10: Checking port listening status..."
 
-    local vless_port=$(jq -r '.inbounds[0].port' "$VLESS_HOME/config/xray_config.json" 2>/dev/null || echo "443")
-
-    # Check if port is listening on host (v5.33: Nginx stream on 443, Xray on 8443 internal)
-    if [[ "$vless_port" == "8443" ]]; then
-        # v5.33 architecture: Port 8443 is internal (container-only), check port 443 instead
-        if ss -tuln | grep -q ":443 "; then
-            log_success "Port 443 is listening on host (Nginx stream frontend)"
-            log_info "  Port 8443 is container-internal only (not on host) - expected for v5.33"
-        elif netstat -tuln 2>/dev/null | grep -q ":443 "; then
-            log_success "Port 443 is listening on host (Nginx stream frontend)"
-            log_info "  Port 8443 is container-internal only (not on host) - expected for v5.33"
+    local port sockets
+    sockets=$(ss -H -ltn) || return 1
+    for port in "${FT_VLESS_PUBLIC_PORT-443}" "${FT_HTTPS_PROXY_PORT-}" "${FT_SOCKS_TLS_PORT-}" "${FT_HTTP_PLAIN_PORT-}" "${FT_SOCKS_PLAIN_PORT-}"; do
+        [[ -n $port ]] || continue
+        if awk -v port="$port" '$4 ~ (":" port "$") {found=1} END{exit !found}' <<< "$sockets"; then
+            log_success "Listening on TCP port $port"
         else
-            log_error "Port 443 is not listening on host (Nginx stream not running)"
+            log_error "Missing selected listener on TCP port $port"
+            return 1
         fi
-    else
-        # Legacy architecture or custom port
-        if ss -tuln | grep -q ":${vless_port} "; then
-            log_success "Port $vless_port is listening on host"
-        elif netstat -tuln 2>/dev/null | grep -q ":${vless_port} "; then
-            log_success "Port $vless_port is listening on host"
-        else
-            log_error "Port $vless_port is not listening on host"
-        fi
-    fi
-
-    # v5.33: familytraffic runs in host network mode — ports 443/1080/8118 bound directly on host
-    # (no Docker port mapping; ss check above is sufficient)
-    log_info "  Container 'familytraffic' uses host network — port binding via host network stack"
+    done
 
     # Check if port is accessible from outside (basic check)
     local server_ip=$(curl -s --max-time 5 ifconfig.me 2>/dev/null || echo "unknown")
@@ -729,57 +710,20 @@ validate_mandatory_tls() {
     # Check 4: Xray inbounds listen on 127.0.0.1 (v5.33 single-container: Nginx and Xray share localhost)
     log_info "  [4/5] Checking Xray proxy inbounds (should be 127.0.0.1)..."
     local config_file="${INSTALL_ROOT}/config/xray_config.json"
-    if ! validate_proxy_auth_config "$config_file" || ! jq -e '
+    if ! validate_proxy_auth_config "$config_file" || ! jq -e --argjson tags "$(proxy_receiver_tags)" '
         [.inbounds[] | select(.tag == "socks5-proxy" or .tag == "http-proxy") |
-         .streamSettings.sockopt.acceptProxyProtocol == true] | length == 2 and all
-    ' "$config_file" >/dev/null 2>&1; then
-        log_error "    Proxy authentication or trusted source forwarding is not configured"
+         (.listen == "127.0.0.1" and .streamSettings.sockopt.acceptProxyProtocol == true)]
+         | length == ($tags | length) and all
+    ' "$config_file" >/dev/null; then
+        log_error "Proxy authentication or trusted source forwarding is not configured"
         validation_failed=1
     fi
-    local socks5_listen
-    local http_listen
-    socks5_listen=$(jq -r '.inbounds[] | select(.tag=="socks5-proxy") | .listen' "$config_file" 2>/dev/null)
-    http_listen=$(jq -r '.inbounds[] | select(.tag=="http-proxy") | .listen' "$config_file" 2>/dev/null)
-
-    if [[ "$socks5_listen" == "127.0.0.1" ]] && [[ "$http_listen" == "127.0.0.1" ]]; then
-        log_success "    ✓ Xray proxies listen on 127.0.0.1 (correct for single-container)"
-    else
-        log_error "    ✗ Xray proxies should listen on 127.0.0.1 (single-container, Nginx forwards locally)"
-        log_error "    Found: SOCKS5=$socks5_listen, HTTP=$http_listen"
-        validation_failed=1
-    fi
-
-    # Check 5: Nginx stream ports accessible
-    log_info "  [5/5] Checking Nginx stream port accessibility..."
-    # Wait for Nginx to fully bind to all ports (prevent race condition)
-    sleep 2
-    local nginx_listening=0
-    # Use awk to extract port column and match exact port number (works with IPv4/IPv6)
-    if ss -tuln | awk '{print $5}' | grep -qE ':443$'; then
-        nginx_listening=$((nginx_listening + 1))
-    fi
-    if ss -tuln | awk '{print $5}' | grep -qE ':1080$'; then
-        nginx_listening=$((nginx_listening + 1))
-    fi
-    if ss -tuln | awk '{print $5}' | grep -qE ':8118$'; then
-        nginx_listening=$((nginx_listening + 1))
-    fi
-
-    if [[ $nginx_listening -eq 3 ]]; then
-        log_success "    ✓ Nginx stream listening on ports 443, 1080, 8118"
-    else
-        log_error "    ✗ Nginx stream not listening on all required ports (found $nginx_listening/3)"
-        validation_failed=1
-    fi
+    verify_port_listening || validation_failed=1
 
     # Final result
     echo ""
     if [[ $validation_failed -eq 0 ]]; then
         log_success "TLS validation: PASSED (v5.33 Nginx stream architecture)"
-        log_info "  • Architecture: Client → Nginx stream (TLS/SNI passthrough) → Xray (127.0.0.1)"
-        log_info "  • Port 443: SNI routing (VLESS Reality passthrough)"
-        log_info "  • Port 1080: SOCKS5 TLS termination → 127.0.0.1:10800"
-        log_info "  • Port 8118: HTTP TLS termination → 127.0.0.1:18118"
         return 0
     else
         log_error "TLS validation: FAILED"

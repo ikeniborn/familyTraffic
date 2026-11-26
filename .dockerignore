@@ -1,6 +1,5 @@
 # .dockerignore
-# Build context: repo root — only docker/familytraffic/ is needed by the Dockerfile.
-# Excluding everything else reduces context from ~3MB+ to ~15KB.
+# Include the runtime image sources and the shared legacy deployment resolver.
 
 # Exclude everything by default
 *
@@ -9,3 +8,6 @@
 !docker/
 !docker/familytraffic/
 !docker/familytraffic/**
+!lib/
+lib/*
+!lib/service_settings.py
