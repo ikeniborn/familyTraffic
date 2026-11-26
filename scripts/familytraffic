@@ -167,6 +167,10 @@ cmd_enable_notls() {
 }
 
 cmd_disable_notls() {
+    if [[ -z ${FT_HTTPS_PROXY_PORT-8118} && -n ${FT_HTTP_PLAIN_PORT-} ]]; then
+        echo "This installation uses plaintext as its only proxy transport." >&2
+        return 1
+    fi
     run_proxy_security_reconcile false || return 1
     echo 'No-TLS listeners disabled. Authentication monitoring covers TLS proxy ports.'
 }
@@ -183,6 +187,18 @@ main() {
     shift
 
     case "$command" in
+        help|--help|-h|logs|list-users|ls|users|status|info|stop|list-transports|listtransports) ;;
+        *)
+            if [[ -f $INSTALL_ROOT/.env ]]; then
+                source "$LIB_DIR/service_modes.sh"
+                load_service_settings "$INSTALL_ROOT" || return 1
+            fi ;;
+    esac
+    if [[ ${FT_SERVICE_MODE-} == proxy && ( $command == *-transport || $command == addtransport || $command == removetransport ) ]]; then
+        echo 'VLESS transports are disabled in proxy-only mode' >&2
+        return 1
+    fi
+    case "$command" in
         add-user|adduser)
             check_root
             if [[ $# -eq 0 ]]; then
@@ -191,7 +207,8 @@ main() {
                 exit 1
             fi
             source_modules
-            create_user "$1"
+            [[ $# -le 2 ]] || { echo "Usage: familytraffic add-user <username> [vpn|proxy|both]" >&2; return 1; }
+            create_user "$@"
             ;;
 
         remove-user|rmuser|deleteuser)
@@ -368,9 +385,14 @@ main() {
                 # Show port routing
                 echo ""
                 echo -e "${CYAN}Port Routing:${NC}"
-                echo "  1. TCP:443  → ssl_preread SNI routing → 127.0.0.1:8443 (VLESS Reality)"
-                echo "  2. TCP:1080 → TLS termination → 127.0.0.1:10800 (SOCKS5)"
-                echo "  3. TCP:8118 → TLS termination → 127.0.0.1:18118 (HTTP proxy)"
+                source "$LIB_DIR/service_modes.sh"
+                if load_service_settings "$INSTALL_ROOT"; then
+                    [[ -z $FT_VLESS_PUBLIC_PORT ]] || echo "  VLESS Reality: $FT_VLESS_PUBLIC_PORT"
+                    [[ -z $FT_HTTPS_PROXY_PORT ]] || echo "  HTTPS proxy: $FT_HTTPS_PROXY_PORT"
+                    [[ -z $FT_SOCKS_TLS_PORT ]] || echo "  SOCKS5 over TLS: $FT_SOCKS_TLS_PORT"
+                    [[ -z $FT_HTTP_PLAIN_PORT ]] || echo "  Plaintext HTTP proxy: $FT_HTTP_PLAIN_PORT"
+                    [[ -z $FT_SOCKS_PLAIN_PORT ]] || echo "  Plaintext SOCKS5: $FT_SOCKS_PLAIN_PORT"
+                fi
 
                 # Show active reverse proxy routes
                 echo ""

@@ -50,11 +50,7 @@ services:
         max-size: "10m"
         max-file: "3"
     healthcheck:
-      # Check services by verifying TCP ports are accepting connections.
-      # Port 8443: xray VLESS Reality; port 443: nginx stream.
-      # Port-based check avoids supervisorctl socket and pgrep PID namespace issues.
-      test: ["CMD", "sh", "-c",
-        "nc -z -w 3 127.0.0.1 8443 && nc -z -w 3 127.0.0.1 443"]
+      test: ["CMD", "/etc/familytraffic/healthcheck.sh"]
       interval: 30s
       timeout: 10s
       retries: 3

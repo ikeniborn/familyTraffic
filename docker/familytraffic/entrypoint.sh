@@ -6,6 +6,10 @@
 
 set -e
 
+if [ "${FT_SERVICE_MODE:-}" = vpn ] && [ -z "${DOMAIN:-}" ]; then
+    exec /usr/bin/supervisord -c /etc/familytraffic/supervisord.conf
+fi
+
 DOMAIN="${DOMAIN:?DOMAIN env var required}"
 ACME_EMAIL="${ACME_EMAIL:?ACME_EMAIL env var required}"
 

@@ -14,6 +14,20 @@
 #
 # Data file: ${VLESS_HOME}/data/transports.json
 
+source "$(dirname "${BASH_SOURCE[0]}")/service_modes.sh"
+
+validate_transport_deployment() {
+    local root=${VLESS_HOME:-/opt/familytraffic}
+    if [[ -f $root/.env ]]; then load_service_settings "$root" || return 1; fi
+    if [[ -z ${DOMAIN-} && -f $root/.env ]]; then
+        DOMAIN=$(sed -nE 's/^DOMAIN=([A-Za-z0-9.-]+)$/\1/p' "$root/.env")
+    fi
+    if [[ ${FT_SERVICE_MODE-} == proxy ]]; then
+        echo "VLESS transports are disabled in proxy-only mode" >&2
+        return 1
+    fi
+}
+
 # Transport state file
 TRANSPORTS_JSON="${VLESS_HOME:-/opt/familytraffic}/data/transports.json"
 
@@ -41,9 +55,14 @@ _init_transports_json() {
 # Returns: 0 on success, 1 on failure
 # ============================================================================
 add_transport() {
+    validate_transport_deployment || return 1
     local transport_type="$1"
     local subdomain="$2"
 
+    if [[ -z ${CERT_DOMAIN:-${VLESS_DOMAIN:-${DOMAIN:-}}} ]]; then
+        log_error "A configured certificate domain is required to add a TLS transport"
+        return 1
+    fi
     _init_transports_json
 
     # Validate type
@@ -151,7 +170,7 @@ add_transport() {
     docker exec familytraffic nginx -s reload 2>/dev/null && log_success "familytraffic reloaded" || \
         log_warning "Failed to reload familytraffic (may not be running)"
 
-    log_success "Transport '$transport_type' is now active on $subdomain:443"
+    log_success "Transport '$transport_type' is now active on $subdomain:${FT_VLESS_PUBLIC_PORT:-443}"
     return 0
 }
 
@@ -162,10 +181,6 @@ add_transport() {
 # ============================================================================
 _regenerate_nginx_config() {
     local cert_domain="${CERT_DOMAIN:-${VLESS_DOMAIN:-${DOMAIN:-}}}"
-    if [[ -z "$cert_domain" ]]; then
-        log_error "CERT_DOMAIN / VLESS_DOMAIN / DOMAIN not set — cannot regenerate nginx.conf"
-        return 1
-    fi
 
     local nginx_conf_dir="${VLESS_DIR:-/opt/familytraffic}/config/nginx"
     mkdir -p "$nginx_conf_dir" || {
@@ -222,10 +237,10 @@ _regenerate_nginx_config() {
 # Returns: 0 always
 # ============================================================================
 list_transports() {
-    _init_transports_json
-
-    local count
-    count=$(jq '.transports | length' "$TRANSPORTS_JSON" 2>/dev/null || echo "0")
+    local count=0
+    if [[ -f $TRANSPORTS_JSON ]]; then
+        count=$(jq '.transports | length' "$TRANSPORTS_JSON") || return 1
+    fi
 
     echo ""
     echo "═══════════════════════════════════════════════════════"
@@ -260,6 +275,7 @@ list_transports() {
 # Returns: 0 on success, 1 on failure
 # ============================================================================
 remove_transport() {
+    validate_transport_deployment || return 1
     local transport_type="$1"
 
     _init_transports_json

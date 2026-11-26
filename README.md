@@ -14,7 +14,20 @@ VLESS + Reality — самодостаточный VPN-сервер с защи�
 
 ---
 
+## Fresh installation modes
+
+| Selection | VLESS Reality | HTTPS proxy | SOCKS5 over TLS |
+|---|---|---|---|
+| VPN only (default) | 443 | Disabled | Disabled |
+| Proxy only | Disabled | 443 | Optional, 1080 |
+| VPN and proxy | 443 | 8118 | Optional, 1080 |
+
+Press Enter to accept an offered port. Each selected public service can use a different available TCP port.
+Proxy installations need a domain pointing to the server and a certificate. The site for visitors without credentials is a proposed second stage.
+
 ## Архитектура
+
+The diagram shows combined mode with default ports and optional services enabled.
 
 ```
 Client

@@ -117,10 +117,14 @@ get_server_info() {
     local -n info_array=$1  # nameref for associative array
 
     # Get server IP
-    info_array[server_ip]=$(curl -s --max-time 5 ifconfig.me 2>/dev/null || echo "SERVER_IP")
+    if declare -F get_server_ip >/dev/null; then
+        info_array[server_ip]=$(get_server_ip)
+    else
+        info_array[server_ip]=$(curl -s --max-time 5 ifconfig.me 2>/dev/null || echo "SERVER_IP")
+    fi
 
     # Get port
-    info_array[server_port]=$(jq -r '.inbounds[0].port' "$XRAY_CONFIG" 2>/dev/null || echo "443")
+    info_array[server_port]="${FT_VLESS_PUBLIC_PORT:-443}"
 
     # Get public key
     if [[ -f "${KEYS_DIR}/public.key" ]]; then

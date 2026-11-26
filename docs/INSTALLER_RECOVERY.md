@@ -1,5 +1,17 @@
 # Installer firewall and deferred proxy setup
 
+## Recover the selected services
+
+Keep the deployment's `.env`, nginx configuration, Xray configuration, user database and keys together.
+The `FT_SERVICE_MODE` value and the five `FT_*_PORT` fields describe the selected external services. Empty port fields disable individual endpoints.
+A proxy-only installation has no Reality keys. A healthy proxy with no users has a private setup account and a blocking route.
+
+When a port is occupied, identify its owner and select a free public port in the fresh-install wizard.
+For an existing deployment, use the installed management commands. They resolve legacy settings from the saved flags, listeners and receivers.
+If those sources disagree, inspect the reported field and restore a matching backup before retrying a configuration change.
+
+
+
 ## SSH and UFW
 
 The installer requests a numeric SSH source IP or CIDR for TCP port 22.

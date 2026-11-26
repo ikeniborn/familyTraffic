@@ -77,6 +77,7 @@ COPY --from=xray-src /usr/bin/xray /usr/bin/xray
 COPY --from=mtg-src /usr/bin/mtg /usr/bin/mtg
 
 # Config file (644 — no --chmod needed)
+COPY lib/service_settings.py /etc/familytraffic/service_settings.py
 COPY docker/familytraffic/supervisord.conf /etc/familytraffic/supervisord.conf
 
 # Bare `supervisorctl` defaults to /etc/supervisord.conf (which apt/apk ships pointing at
@@ -86,6 +87,7 @@ RUN ln -sf /etc/familytraffic/supervisord.conf /etc/supervisord.conf
 # Runtime scripts — merged into one COPY to save a layer
 COPY --chmod=755 \
     docker/familytraffic/certbot-renew.sh \
+    docker/familytraffic/healthcheck.sh \
     docker/familytraffic/entrypoint.sh \
     /etc/familytraffic/
 
@@ -96,6 +98,6 @@ EXPOSE 443 1080 1081 8118 8119 2053
 
 # Fallback healthcheck — overridden by docker-compose.yml when run via compose
 HEALTHCHECK --interval=30s --timeout=10s --retries=3 --start-period=20s \
-    CMD nc -z -w 3 127.0.0.1 8443 && nc -z -w 3 127.0.0.1 443
+    CMD ["/etc/familytraffic/healthcheck.sh"]
 
 ENTRYPOINT ["/etc/familytraffic/entrypoint.sh"]

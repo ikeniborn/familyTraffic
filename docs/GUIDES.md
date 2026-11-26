@@ -1,5 +1,17 @@
 # familyTraffic VPN — Руководство
 
+## Select services on a fresh host
+
+1. Select **VPN only**, **Proxy only**, or **VPN and proxy** in the installer.
+2. Accept the displayed ports or enter free TCP ports. The HTTPS default is 443 on a proxy-only host and 8118 on a combined host.
+3. Enable SOCKS5 over TLS if required. Its default port is 1080. Enable plaintext listeners only on an appropriate network.
+4. For a TLS proxy, supply the server domain and certificate contact email. For VPN, select the Reality destination.
+5. Review the service and port summary. Add a user with the installed management CLI. A fresh proxy refuses forwarding until it has an authorized user.
+
+The optional connection type for user creation is `vpn`, `proxy`, or `both`. Client files contain the public ports selected during installation.
+
+
+
 **v5.33** · [← README](../README.md)
 
 ---
@@ -26,7 +38,7 @@
 **Сервер:**
 - Ubuntu 20.04+ или Debian 10+
 - Публичный IPv4-адрес
-- Открытые входящие порты: `443`, `1080`, `8118`
+- Inbound TCP access to the selected public ports. TLS proxy installations also require TCP 80 for the HTTP-01 challenge.
 
 **Для TLS-прокси, Tier 2, Reverse proxy:**
 - Домен с A-записью, указывающей на IP сервера
@@ -47,16 +59,9 @@ cd vless
 sudo ./install.sh
 ```
 
-Установщик пройдёт через шаги:
+Choose the services and ports using the table at the start of this guide. The installer checks for port conflicts before applying the selection. VPN modes ask for a Reality destination. TLS proxy modes ask for the domain and certificate contact email.
 
-1. **Проверка системы** — Docker, UFW, порты, DNS
-2. **Reality параметры** — домен маскировки (например, `www.microsoft.com`), порт (`443`)
-3. **Домен и email** — для Let's Encrypt (опционально, нужен для прокси)
-4. **DNS** — автоматическое тестирование Cloudflare/Google/Quad9, выбор оптимального
-5. **Прокси-режим** — включить SOCKS5/HTTP прокси или нет
-6. **Запуск** — генерация конфигов, старт контейнеров, выпуск сертификата
-
-Create users after installation and choose VPN, proxy, or both. Selected proxies remain configured and locked until the first proxy-enabled user exists. See [SSH/UFW and deferred proxy setup](INSTALLER_RECOVERY.md).
+Create users after installation. Choose a connection type supported by the installed services. A proxy begins serving traffic when the first proxy-enabled user is provisioned. [SSH, UFW and deferred proxy setup](INSTALLER_RECOVERY.md).
 
 **Файлы устанавливаются в `/opt/familytraffic/`:**
 

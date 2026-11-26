@@ -235,6 +235,13 @@ source_libraries() {
 #   9. Verify installation success
 #   10. Display sudoers configuration instructions
 ################################################################################
+check_fresh_installation() {
+    if [[ -e /opt/familytraffic/data/users.json || -e /opt/familytraffic/.env || -e /opt/vless/data/users.json ]]; then
+        print_error 'Existing deployment detected. Use the installed management tools and recovery guide.'
+        return 1
+    fi
+}
+
 main() {
     # Display welcome banner
     print_banner
@@ -243,10 +250,7 @@ main() {
     print_step 1 "Checking root privileges"
     check_root
     print_success "Running with root privileges"
-    if [[ -e /opt/familytraffic/data/users.json ]]; then
-        print_error 'Existing deployment detected. Use familytraffic-security reconcile with a prebuilt image instead of the fresh installer.'
-        exit 1
-    fi
+    check_fresh_installation || exit 1
 
     # Run migration (upgrade path: /opt/familytraffic → /opt/familytraffic)
     if [[ -d /opt/familytraffic ]] && [[ ! -L /opt/familytraffic ]]; then
@@ -271,6 +275,10 @@ main() {
 
     # Get package manager (required for dependency installation)
     get_package_manager
+
+    # Select and validate the public services before dependency installation or cleanup.
+    select_service_mode || exit 1
+    check_selected_ports || exit 1
 
     # Step 4: Check dependencies
     print_step 4 "Checking dependencies"
