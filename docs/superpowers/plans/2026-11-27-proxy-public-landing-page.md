@@ -12,6 +12,13 @@ review:
     verifiability: { status: passed }
     consistency: { status: passed }
   findings: []
+result_check:
+  verdict: OK
+  source: plan
+  plan_hash: 5306df5516931dbb
+  last_run: 2026-11-27
+  reviewed: true
+  docs_checked: true
 ---
 # Public landing page implementation plan
 
