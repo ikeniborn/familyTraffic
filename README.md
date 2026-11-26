@@ -54,7 +54,7 @@ Client
 |---|---|---|
 | xray | 1 | VLESS Reality, Tier 2, SOCKS5, HTTP proxy |
 | nginx | 2 | SNI routing (443), TLS termination, cloak-port (4443) |
-| certbot-cron | 3 | Авторенew Let's Encrypt каждые 12 часов |
+| certbot-cron | 3 | Legacy installations only. Fresh TLS proxy installations use the host Certbot timer. |
 | mtg | 4 | MTProxy (Fake TLS, порт 2053) — `autostart=true` если включён при установке или `mtproxy setup` |
 
 ---

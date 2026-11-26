@@ -396,16 +396,16 @@ main() {
         # 3. Obtain certificate; the unified ACME workflow manages port 80
         print_message "${COLOR_CYAN}" "[3/4] Obtaining Let's Encrypt certificate..."
         print_message "${COLOR_YELLOW}" "  This may take 30-60 seconds..."
+        install -D -m 0755 "$SCRIPT_DIR/scripts/familytraffic-acme-hook" /usr/local/lib/familytraffic/acme-hook || exit 1
         if ! obtain_certificate "$DOMAIN" "$EMAIL"; then
             print_error "Certificate acquisition failed"
             exit 1
         fi
 
-        # 4. Setup auto-renewal cron job
-        print_message "${COLOR_CYAN}" "[4/4] Setting up certificate auto-renewal..."
-        if ! setup_renewal_cron; then
-            print_warning "Failed to setup auto-renewal cron"
-            print_message "${COLOR_YELLOW}" "  You may need to configure it manually"
+        print_message "${COLOR_CYAN}" "[4/4] Enabling the host certificate renewal timer..."
+        if ! enable_host_certificate_renewal "$DOMAIN"; then
+            print_error "Failed to configure automatic renewal for $DOMAIN"
+            exit 1
         fi
 
         # Install deploy hook script

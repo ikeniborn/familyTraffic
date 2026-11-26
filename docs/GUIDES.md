@@ -374,27 +374,19 @@ Per-user proxy работает только для VLESS (email-based routing).
 
 ## 9. Обновление сертификатов
 
-Certbot обновляет сертификаты автоматически через `--deploy-hook`. После обновления хук:
+For fresh TLS proxy installations, the host's `certbot.timer` checks whether the certificate is due. If a renewal is due, its pre-hook temporarily allows TCP 80 through the active IPv4 and IPv6 UFW chains for the HTTP-01 challenge. The post-hook removes those rules after success or failure. The kernel stops matching the temporary rules after 15 minutes if Certbot is interrupted. Existing operator rules still apply. On successful issuance for the running proxy, the deploy hook reloads nginx.
 
-1. Валидирует новые файлы сертификата
-2. Проверяет здоровье контейнера `familytraffic` (supervisorctl status)
-3. Выполняет `nginx -s reload` (zero-downtime)
-4. Перезапускает `familytraffic`
+Inspect the schedule and the most recent run:
 
-**Принудительное обновление:**
 ```bash
-sudo certbot renew --force-renewal
+systemctl list-timers certbot.timer
+sudo journalctl -u certbot.service
 ```
 
-**Ручной вызов хука:**
+When testing with a public Let's Encrypt installation, exercise the staging CA with the certificate's actual name:
+
 ```bash
-RENEWED_DOMAINS="yourdomain.com" sudo /usr/local/bin/familytraffic-cert-renew
-```
-
-**Логи:**
-```
-/opt/familytraffic/logs/certbot-renew.log
-/opt/familytraffic/logs/certbot-renew-metrics.json
+sudo certbot renew --cert-name YOUR_DOMAIN --dry-run
 ```
 
 ---

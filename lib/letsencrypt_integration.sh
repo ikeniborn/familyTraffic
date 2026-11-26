@@ -341,9 +341,8 @@ acquire_certificate() (
         return 1
     fi
 
-    # Step 2: Open port 80 in UFW (if needed)
-    echo ""
-    if ! open_port_80_for_certbot; then
+    # New lineages open the challenge window through their Certbot pre-hook.
+    if [[ -z ${FT_SERVICE_MODE:-} ]] && ! open_port_80_for_certbot; then
         echo "Warning: Failed to open port 80 in UFW, continuing anyway..." >&2
     fi
 
@@ -356,6 +355,11 @@ acquire_certificate() (
 
     # Prepare certbot command
     local certbot_cmd=(certbot certonly --webroot -w "$CERTBOT_WEBROOT" -d "$domain" --non-interactive --agree-tos)
+
+    if [[ -n ${FT_SERVICE_MODE:-} ]]; then
+        local hook=/usr/local/lib/familytraffic/acme-hook
+        certbot_cmd+=(--cert-name "$domain" --pre-hook "$hook open" --post-hook "$hook close" --deploy-hook "$hook reload")
+    fi
 
     if [[ -n "$email" ]]; then
         certbot_cmd+=(--email "$email")

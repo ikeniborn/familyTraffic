@@ -29,6 +29,7 @@ load '../test_helper'
         get_server_public_ip() { printf "%s\n" "203.0.113.10"; }
         validate_domain_dns() { return 0; }
         install_certbot() { return 0; }
+        install() { :; }
         obtain_certificate() {
             printf "%s\n" "obtain_certificate:$1:$2"
             return 1
@@ -80,4 +81,51 @@ load '../test_helper'
     local root
     root=$(sed -n '/location \/.well-known\/acme-challenge\//,+1s/.*root \([^;]*\);/\1/p' <<< "$output")
     [ "$root" = "$CERTBOT_WEBROOT" ]
+}
+
+@test "new service-mode images delegate renewal to the host" {
+    local bin="$BATS_TEST_TMPDIR/bin"
+    mkdir "$bin"
+    printf '#!/bin/sh\ntouch "$TRACE"\n' > "$bin/certbot"
+    printf '#!/bin/sh\nkill -TERM "$PPID"\n' > "$bin/sleep"
+    chmod +x "$bin/"*
+    run env FT_SERVICE_MODE=proxy TRACE="$bin/called" PATH="$bin:$PATH" sh "$PROJECT_ROOT/docker/familytraffic/certbot-renew.sh"
+    [ "$status" -eq 0 ]
+    [ ! -e "$bin/called" ]
+}
+
+@test "renewal opens only time-limited TCP 80 rules, then removes the same rules" {
+    source "$PROJECT_ROOT/scripts/familytraffic-acme-hook"
+    state="$BATS_TEST_TMPDIR/until"
+    trace="$BATS_TEST_TMPDIR/rules"
+    ufw() { echo 'Status: active'; }
+    iptables() { echo "ipv4 $*" >> "$trace"; }
+    ip6tables() { echo "ipv6 $*" >> "$trace"; }
+    acme_hook_main open
+    local deadline
+    deadline=$(cat "$state")
+    acme_hook_main close
+    [ ! -e "$state" ]
+    for family in ipv4 ipv6; do
+        local chain=ufw-user-input
+        [[ $family == ipv4 ]] || chain=ufw6-user-input
+        for op in -A -D; do
+            grep -Fqx "$family -w $op $chain -p tcp --dport 80 -m time --datestop $deadline -m comment --comment familytraffic-http01 -j ACCEPT" "$trace"
+        done
+    done
+    acme_hook_main close
+    [ "$(grep -c -- ' -D ' "$trace")" -eq 2 ]
+}
+
+@test "a partial IPv6 hook failure removes the temporary IPv4 grant" {
+    source "$PROJECT_ROOT/scripts/familytraffic-acme-hook"
+    state="$BATS_TEST_TMPDIR/until"
+    trace="$BATS_TEST_TMPDIR/rules"
+    ufw() { echo 'Status: active'; }
+    iptables() { echo "$*" >> "$trace"; }
+    ip6tables() { [[ $2 == -S ]]; }
+    run acme_hook_main open
+    [ "$status" -ne 0 ]
+    grep -q -- '-D ufw-user-input' "$trace"
+    [ ! -e "$state" ]
 }
