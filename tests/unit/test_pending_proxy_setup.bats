@@ -22,7 +22,12 @@ JSON
     initialize_pending_proxy_config "$XRAY_CONFIG"
     source "$PROJECT_ROOT/lib/user_management.sh"
     log_info() { :; }; log_success() { :; }; log_error() { :; }
+    chmod 644 "$XRAY_CONFIG"
+    local inode
+    inode=$(stat -c %i "$XRAY_CONFIG")
     update_proxy_accounts alice secret-for-test
+    [ "$(stat -c %i "$XRAY_CONFIG")" = "$inode" ]
+    [ "$(stat -c %a "$XRAY_CONFIG")" = 600 ]
     ! proxy_config_is_pending "$XRAY_CONFIG"
     jq -e 'all(.inbounds[]; .settings.accounts == [{user:"alice",pass:"secret-for-test"}]) and .routing.rules == [{type:"field",domain:["example.com"],outboundTag:"direct"}]' "$XRAY_CONFIG"
     validate_proxy_auth_config "$XRAY_CONFIG"
@@ -75,4 +80,23 @@ JSON
     printf '{"users":[{"username":"alice","proxy_password":"secret"}]}' > "$USERS_JSON"
     run validate_saved_proxy_accounts "$XRAY_CONFIG" "$USERS_JSON"
     [ "$status" -ne 0 ]
+}
+
+@test "vision migration keeps the active config and temporary credentials private" {
+    source "$PROJECT_ROOT/lib/user_management.sh"
+    jq '.inbounds[0].settings.clients = [{id:"fixture"}]' "$XRAY_CONFIG" > "$BATS_TEST_TMPDIR/legacy"
+    mv "$BATS_TEST_TMPDIR/legacy" "$XRAY_CONFIG"
+    chmod 644 "$XRAY_CONFIG"
+    umask 022
+    docker() { return 0; }
+    jq() {
+        local file
+        for file in "$XRAY_CONFIG".bak.* "$XRAY_CONFIG".tmp.*; do
+            [[ ! -e $file || $(stat -c %a "$file") == 600 ]] || return 1
+        done
+        command jq "$@"
+    }
+    migrate_xtls_vision
+    [ "$(stat -c %a "$XRAY_CONFIG")" = 600 ]
+    jq -e '.inbounds[0].settings.clients[0].flow == "xtls-rprx-vision"' "$XRAY_CONFIG"
 }

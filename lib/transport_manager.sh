@@ -148,7 +148,7 @@ add_transport() {
                 ;;
         esac
         local xray_temp
-        xray_temp="${xray_config}.tmp.$$"
+        xray_temp=$(mktemp "${xray_config}.tmp.XXXXXX") || return 1
         jq --argjson inbound "$new_inbound" '.inbounds += [$inbound]' \
             "$xray_config" > "$xray_temp" || { rm -f "$xray_temp"; log_error "Failed to append inbound to xray_config.json"; return 1; }
         if ! jq empty "$xray_temp" 2>/dev/null; then
@@ -156,7 +156,7 @@ add_transport() {
             log_error "xray_config.json update produced invalid JSON"
             return 1
         fi
-        write_preserving_inode "$xray_temp" "$xray_config"
+        write_preserving_inode "$xray_temp" "$xray_config" 600 || return 1
         log_success "Inbound '$inbound_tag' appended to xray_config.json (existing users preserved)"
     fi
 
@@ -313,7 +313,7 @@ remove_transport() {
 
     if [[ -f "$xray_config" ]]; then
         local xray_temp
-        xray_temp="${xray_config}.tmp.$$"
+        xray_temp=$(mktemp "${xray_config}.tmp.XXXXXX") || return 1
         jq --arg tag "$tag" '.inbounds = [.inbounds[] | select(.tag != $tag)]' \
             "$xray_config" > "$xray_temp" || { rm -f "$xray_temp"; log_error "Failed to update xray_config.json"; return 1; }
         if ! jq empty "$xray_temp" 2>/dev/null; then
@@ -321,7 +321,7 @@ remove_transport() {
             log_error "xray_config.json update produced invalid JSON"
             return 1
         fi
-        write_preserving_inode "$xray_temp" "$xray_config"
+        write_preserving_inode "$xray_temp" "$xray_config" 600 || return 1
         log_success "Removed inbound '$tag' from xray_config.json"
     else
         log_warning "xray_config.json not found — skipping inbound removal"

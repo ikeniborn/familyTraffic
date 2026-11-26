@@ -410,7 +410,9 @@ get_user_info() {
             fi
 
             local socks_uri="${socks_scheme}://${username}:${proxy_password}@${proxy_host}:${FT_SOCKS_TLS_PORT:-${FT_SOCKS_PLAIN_PORT:-1080}}"
-            local http_uri="${http_scheme}://${username}:${proxy_password}@${proxy_host}:${FT_HTTPS_PROXY_PORT:-${FT_HTTP_PLAIN_PORT:-8118}}"
+            local http_authority
+            http_authority=$(proxy_authority "$http_scheme" "$proxy_host" "${FT_HTTPS_PROXY_PORT:-${FT_HTTP_PLAIN_PORT:-8118}}")
+            local http_uri="${http_scheme}://${username}:${proxy_password}@${http_authority}"
 
             echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
             echo -e "${CYAN}  Proxy — SOCKS5 / HTTP${NC}"
@@ -621,10 +623,13 @@ add_client_to_xray() {
     fi
 
     # Create backup
-    cp "$XRAY_CONFIG" "${XRAY_CONFIG}.bak.$$"
+    local backup
+    backup=$(mktemp "${XRAY_CONFIG}.bak.XXXXXX") || return 1
+    cp "$XRAY_CONFIG" "$backup" || return 1
 
     # Add client to inbounds[0].settings.clients array
-    local temp_file="${XRAY_CONFIG}.tmp.$$"
+    local temp_file
+    temp_file=$(mktemp "${XRAY_CONFIG}.tmp.XXXXXX") || return 1
 
     jq ".inbounds[0].settings.clients += [{
         \"id\": \"$uuid\",
@@ -644,7 +649,8 @@ add_client_to_xray() {
 
         if [[ "$short_id_exists" == "null" ]]; then
             # ShortId doesn't exist, add it
-            local temp_file2="${XRAY_CONFIG}.tmp2.$$"
+            local temp_file2
+            temp_file2=$(mktemp "${XRAY_CONFIG}.tmp2.XXXXXX") || return 1
             jq --arg sid "$short_id" \
                 '.inbounds[0].streamSettings.realitySettings.shortIds += [$sid]' \
                 "$temp_file" > "$temp_file2"
@@ -659,7 +665,7 @@ add_client_to_xray() {
     if ! jq empty "$temp_file" 2>/dev/null; then
         log_error "Generated invalid Xray configuration"
         rm -f "$temp_file"
-        write_preserving_inode "${XRAY_CONFIG}.bak.$$" "$XRAY_CONFIG"
+        write_preserving_inode "$backup" "$XRAY_CONFIG" 600
         return 1
     fi
 
@@ -687,14 +693,14 @@ add_client_to_xray() {
             log_error "Xray configuration validation failed:"
             echo "$validation_output" >&2
             rm -f "$temp_file"
-            write_preserving_inode "${XRAY_CONFIG}.bak.$$" "$XRAY_CONFIG"
+            write_preserving_inode "$backup" "$XRAY_CONFIG" 600
             return 1
         fi
     fi
 
     # Apply configuration — write preserving inode (required for Docker bind mounts)
-    write_preserving_inode "$temp_file" "$XRAY_CONFIG"
-    rm -f "${XRAY_CONFIG}.bak.$$"
+    write_preserving_inode "$temp_file" "$XRAY_CONFIG" 600 || return 1
+    rm -f "$backup"
 
     log_success "Client added to Xray configuration"
     return 0
@@ -718,10 +724,13 @@ remove_client_from_xray() {
     fi
 
     # Create backup
-    cp "$XRAY_CONFIG" "${XRAY_CONFIG}.bak.$$"
+    local backup
+    backup=$(mktemp "${XRAY_CONFIG}.bak.XXXXXX") || return 1
+    cp "$XRAY_CONFIG" "$backup" || return 1
 
     # Remove client from inbounds[0].settings.clients array
-    local temp_file="${XRAY_CONFIG}.tmp.$$"
+    local temp_file
+    temp_file=$(mktemp "${XRAY_CONFIG}.tmp.XXXXXX") || return 1
 
     jq ".inbounds[0].settings.clients = [.inbounds[0].settings.clients[] | select(.id != \"$uuid\")]" \
         "$XRAY_CONFIG" > "$temp_file"
@@ -730,7 +739,8 @@ remove_client_from_xray() {
     if [[ -n "$user_short_id" ]]; then
         log_info "Removing user shortId from realitySettings..."
 
-        local temp_file2="${XRAY_CONFIG}.tmp2.$$"
+        local temp_file2
+        temp_file2=$(mktemp "${XRAY_CONFIG}.tmp2.XXXXXX") || return 1
         jq --arg sid "$user_short_id" \
             '.inbounds[0].streamSettings.realitySettings.shortIds = [.inbounds[0].streamSettings.realitySettings.shortIds[] | select(. != $sid)]' \
             "$temp_file" > "$temp_file2"
@@ -742,7 +752,7 @@ remove_client_from_xray() {
     if ! jq empty "$temp_file" 2>/dev/null; then
         log_error "Generated invalid Xray configuration"
         rm -f "$temp_file"
-        write_preserving_inode "${XRAY_CONFIG}.bak.$$" "$XRAY_CONFIG"
+        write_preserving_inode "$backup" "$XRAY_CONFIG" 600
         return 1
     fi
 
@@ -769,18 +779,18 @@ remove_client_from_xray() {
             log_error "Xray configuration validation failed:"
             echo "$validation_output" >&2
             rm -f "$temp_file"
-            write_preserving_inode "${XRAY_CONFIG}.bak.$$" "$XRAY_CONFIG"
+            write_preserving_inode "$backup" "$XRAY_CONFIG" 600
             return 1
         fi
     fi
 
     # Apply configuration — write preserving inode (required for Docker bind mounts)
-    if ! write_preserving_inode "$temp_file" "$XRAY_CONFIG"; then
+    if ! write_preserving_inode "$temp_file" "$XRAY_CONFIG" 600; then
         log_error "Failed to save Xray client removal"
         rm -f "$temp_file"
         return 1
     fi
-    rm -f "${XRAY_CONFIG}.bak.$$"
+    rm -f "$backup"
 
     log_success "Client removed from Xray configuration"
     return 0
@@ -835,7 +845,8 @@ apply_per_user_routing() {
         return 1
     fi
 
-    local temp_file="${XRAY_CONFIG}.tmp.$$"
+    local temp_file
+    temp_file=$(mktemp "${XRAY_CONFIG}.tmp.XXXXXX") || return 1
 
     # Use mktemp to avoid predictable /tmp path (CWE-377 symlink attack)
     local routing_tmp
@@ -870,7 +881,7 @@ apply_per_user_routing() {
     fi
 
     # Apply changes — write preserving inode (required for Docker bind mounts)
-    write_preserving_inode "$temp_file" "$XRAY_CONFIG"
+    write_preserving_inode "$temp_file" "$XRAY_CONFIG" 600 || return 1
     rm -f "$routing_tmp"
 
     log_success "Per-user routing applied successfully"
@@ -1063,7 +1074,7 @@ update_proxy_accounts() {
         (.inbounds[] | select(.tag == "http-proxy" or .tag == "socks5-proxy") | .settings.accounts) |=
         (map(select(.user != "@ft-unprovisioned" and .user != $name)) + [{user:$name, pass:$pass}])
     ' "$XRAY_CONFIG" > "$stage" || ! validate_proxy_auth_config "$stage" ||
-        ! write_preserving_inode "$stage" "$XRAY_CONFIG"; then
+        ! write_preserving_inode "$stage" "$XRAY_CONFIG" 600; then
         rm -f "$stage"
         return 1
     fi
@@ -1115,7 +1126,7 @@ rebuild_proxy_accounts_from_users_json() {
         rm -f "$tmp"
         return 1
     fi
-    write_preserving_inode "$tmp" "${XRAY_CONFIG}" || return 1
+    write_preserving_inode "$tmp" "${XRAY_CONFIG}" 600 || return 1
 
     local count
     count=$(echo "$proxy_accounts" | jq 'length')
@@ -1161,7 +1172,7 @@ remove_proxy_accounts() {
     fi
 
     # Write preserving inode (required for Docker bind mounts)
-    if ! write_preserving_inode "$temp_file" "$config"; then
+    if ! write_preserving_inode "$temp_file" "$config" 600; then
         log_error "Failed to save updated Xray config"
         rm -f "$temp_file"
         return 1
@@ -1243,6 +1254,8 @@ show_proxy_credentials() {
         mode_label="Public access ($http_scheme)"
     fi
 
+    local http_authority
+    http_authority=$(proxy_authority "$http_scheme" "$proxy_host" "${FT_HTTPS_PROXY_PORT:-${FT_HTTP_PLAIN_PORT:-8118}}")
     # Display credentials
     echo ""
     echo "═══════════════════════════════════════════════════════"
@@ -1267,20 +1280,20 @@ show_proxy_credentials() {
     echo "HTTP Proxy:"
     echo "  Host:     ${proxy_host}"
     echo "  Port:     ${FT_HTTPS_PROXY_PORT:-${FT_HTTP_PLAIN_PORT:-8118}}"
-    echo "  URI:      ${http_scheme}://${username}:${proxy_password}@${proxy_host}:${FT_HTTPS_PROXY_PORT:-${FT_HTTP_PLAIN_PORT:-8118}}"
+    echo "  URI:      ${http_scheme}://${username}:${proxy_password}@${http_authority}"
     echo ""
     echo "─────────────────────────────────────────────────────"
     echo "Usage Examples:"
     echo ""
     if [[ "$enable_public_proxy" == "true" ]]; then
-        echo "  curl --proxy ${http_scheme}://${username}:${proxy_password}@${proxy_host}:${FT_HTTPS_PROXY_PORT:-${FT_HTTP_PLAIN_PORT:-8118}} https://ifconfig.me"
+        echo "  curl --proxy ${http_scheme}://${username}:${proxy_password}@${http_authority} https://ifconfig.me"
     else
         echo "  curl --socks5 ${username}:${proxy_password}@${proxy_host}:${FT_SOCKS_TLS_PORT:-${FT_SOCKS_PLAIN_PORT:-1080}} https://ifconfig.me"
-        echo "  curl --proxy ${http_scheme}://${username}:${proxy_password}@${proxy_host}:${FT_HTTPS_PROXY_PORT:-${FT_HTTP_PLAIN_PORT:-8118}} https://ifconfig.me"
+        echo "  curl --proxy ${http_scheme}://${username}:${proxy_password}@${http_authority} https://ifconfig.me"
     fi
     echo ""
     echo "VSCode (settings.json):"
-    echo "  \"http.proxy\": \"${http_scheme}://${proxy_host}:${FT_HTTPS_PROXY_PORT:-${FT_HTTP_PLAIN_PORT:-8118}}\","
+    echo "  \"http.proxy\": \"${http_scheme}://${http_authority}\","
     echo "  \"http.proxyAuthorization\": \"$(echo -n "${username}:${proxy_password}" | base64)\""
     echo "═══════════════════════════════════════════════════════"
     echo ""
@@ -1335,7 +1348,7 @@ reset_proxy_password() (
     jq --arg name "$username" --arg pass "$new_password"         '(.users[] | select(.username == $name).proxy_password) = $pass' "$USERS_JSON" > "$work/users.next" || return 1
     if ! update_proxy_accounts "$username" "$new_password" || ! reload_xray ||
             ! write_preserving_inode "$work/users.next" "$USERS_JSON"; then
-        if write_preserving_inode "$work/xray.before" "$XRAY_CONFIG" &&
+        if write_preserving_inode "$work/xray.before" "$XRAY_CONFIG" 600 &&
                 write_preserving_inode "$work/users.before" "$USERS_JSON" && reload_xray; then
             rm -rf "$work"
         else
@@ -1379,6 +1392,8 @@ reset_proxy_password() (
         mode_label="v4.0 - Public TLS"
     fi
 
+    local http_authority
+    http_authority=$(proxy_authority "$http_scheme" "$proxy_host" "${FT_HTTPS_PROXY_PORT:-${FT_HTTP_PLAIN_PORT:-8118}}")
     echo ""
     echo "═══════════════════════════════════════════════════════"
     echo "  PROXY PASSWORD RESET SUCCESSFUL ($mode_label)"
@@ -1392,7 +1407,7 @@ reset_proxy_password() (
         echo ""
     fi
     [[ -z ${FT_SOCKS_TLS_PORT-1080}${FT_SOCKS_PLAIN_PORT-} ]] || echo "SOCKS5: ${socks_scheme}://${username}:${new_password}@${proxy_host}:${FT_SOCKS_TLS_PORT:-${FT_SOCKS_PLAIN_PORT:-1080}}"
-    echo "HTTP:   ${http_scheme}://${username}:${new_password}@${proxy_host}:${FT_HTTPS_PROXY_PORT:-${FT_HTTP_PLAIN_PORT:-8118}}"
+    echo "HTTP:   ${http_scheme}://${username}:${new_password}@${http_authority}"
     echo ""
     echo "NOTE: Proxy config files updated in /opt/familytraffic/data/clients/$username/"
     echo "═══════════════════════════════════════════════════════"
@@ -1447,6 +1462,15 @@ get_server_ip() {
 # Related: TASK-11.4 (Proxy Configuration Export)
 # Note: v3.3 - Uses socks5s:// (TLS) for public proxy, socks5:// for localhost
 # =============================================================================
+proxy_authority() {
+    local scheme=$1 host=$2 port=$3
+    if [[ $scheme == https && $port == 443 ]]; then
+        printf '%s\n' "$host"
+    else
+        printf '%s:%s\n' "$host" "$port"
+    fi
+}
+
 proxy_client_address() {
     local protocol=$1 credentials=${2-} host=${DOMAIN:-127.0.0.1} scheme port
     if [[ $protocol == http ]]; then
@@ -1463,7 +1487,7 @@ proxy_client_address() {
     elif [[ -z ${DOMAIN:-} ]]; then
         host=$(get_server_ip) || return 1
     fi
-    printf '%s://%s%s:%s\n' "$scheme" "${credentials:+$credentials@}" "$host" "$port"
+    printf '%s://%s%s\n' "$scheme" "${credentials:+$credentials@}" "$(proxy_authority "$scheme" "$host" "$port")"
 }
 
 export_socks5_config() {
@@ -1993,6 +2017,8 @@ migrate_xtls_vision() {
         return 1
     fi
 
+    chmod 600 "$XRAY_CONFIG" || return 1
+
     # Count clients missing flow field
     local missing_count
     missing_count=$(jq '[.inbounds[0].settings.clients[] | select(.flow == null or .flow == "")] | length' \
@@ -2006,10 +2032,13 @@ migrate_xtls_vision() {
     log_info "Found $missing_count user(s) without flow field — migrating..."
 
     # Backup
-    cp "$XRAY_CONFIG" "${XRAY_CONFIG}.bak.migrate.$$"
+    local backup
+    backup=$(mktemp "${XRAY_CONFIG}.bak.XXXXXX") || return 1
+    cp "$XRAY_CONFIG" "$backup" || return 1
 
     # Add flow field to all clients missing it
-    local temp_file="${XRAY_CONFIG}.tmp.migrate.$$"
+    local temp_file
+    temp_file=$(mktemp "${XRAY_CONFIG}.tmp.migrate.XXXXXX") || return 1
     jq '(.inbounds[0].settings.clients[] | select(.flow == null or .flow == "")) |= . + {"flow": "xtls-rprx-vision"}' \
         "$XRAY_CONFIG" > "$temp_file"
 
@@ -2019,9 +2048,8 @@ migrate_xtls_vision() {
         return 1
     fi
 
-    write_preserving_inode "$temp_file" "$XRAY_CONFIG"
-    chmod 644 "$XRAY_CONFIG"
-    rm -f "${XRAY_CONFIG}.bak.migrate.$$"
+    write_preserving_inode "$temp_file" "$XRAY_CONFIG" 600 || return 1
+    rm -f "$backup"
 
     log_success "XTLS Vision migration complete: $missing_count user(s) updated"
     log_warning "IMPORTANT: Existing clients must update their VLESS URI to include flow=xtls-rprx-vision"
@@ -2442,7 +2470,7 @@ create_user() (
     cp -p "$XRAY_CONFIG" "$work/xray.before" && cp -p "$USERS_JSON" "$work/users.before" || return 1
     trap '
         if [[ $rollback == true ]]; then
-            if ! write_preserving_inode "$work/xray.before" "$XRAY_CONFIG" ||
+            if ! write_preserving_inode "$work/xray.before" "$XRAY_CONFIG" 600 ||
                     ! write_preserving_inode "$work/users.before" "$USERS_JSON" || ! reload_xray; then
                 log_error "Account activation failed. Recovery files retained in $work"
                 exit 1
@@ -2649,7 +2677,7 @@ remove_user() (
             if [[ "$database_changed" == true ]]; then
                 write_preserving_inode "$work/users.before" "$USERS_JSON" || { restore_failed=true; log_error "Failed to restore user database"; }
             fi
-            if write_preserving_inode "$work/xray.before" "$XRAY_CONFIG"; then
+            if write_preserving_inode "$work/xray.before" "$XRAY_CONFIG" 600; then
                 reload_xray || { restore_failed=true; log_error "Configuration restored, but Xray reload failed; operator action required"; }
             else
                 restore_failed=true
@@ -2683,7 +2711,7 @@ remove_user() (
             initialize_pending_proxy_config "$work/xray.next" || return 1
         fi
         validate_proxy_auth_config "$work/xray.next" || return 1
-        write_preserving_inode "$work/xray.next" "$XRAY_CONFIG" || return 1
+        write_preserving_inode "$work/xray.next" "$XRAY_CONFIG" 600 || return 1
     fi
     if ! reload_xray; then
         log_error 'User removal failed: Xray activation failed; preserving user database'
@@ -3097,6 +3125,7 @@ if [[ "${BASH_SOURCE[0]}" != "${0}" ]]; then
     export -f export_bash_config
     export -f export_git_config
     export -f export_all_proxy_configs
+    export -f proxy_authority
     export -f get_server_ip
     export -f log_info
     export -f log_success
