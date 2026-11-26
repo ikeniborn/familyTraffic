@@ -82,6 +82,8 @@ def main():
             node("/repo/scripts/familytraffic-security check")
             after = json.loads(node(SNAPSHOT).stdout)
             assert before["image"] != after["image"] == image
+            page_check = "curl -fsS --retry 8 --retry-connrefused --resolve proxy.lab:8118:127.0.0.1 --noproxy '*' https://proxy.lab:8118/ | cmp - /repo/docker/familytraffic/xray/landing.html"
+            node(page_check)
             assert before["users"] == after["users"]
             assert before["inodes"] == after["inodes"]
             assert after["override"] and "acceptProxyProtocol" in after["xray"]
@@ -91,6 +93,7 @@ def main():
             (artifacts / "rollback.log").write_text(failed.stdout + failed.stderr)
             assert failed.returncode != 0
             restored = json.loads(node(SNAPSHOT).stdout)
+            node(page_check)
             assert restored == after, "Rollback failed to restore exact pair/image/users/settings/inodes"
             node("/repo/scripts/familytraffic-security check")
             node("source /repo/scripts/familytraffic-security; security_paths; SECURITY_WORK=$(mktemp -d); security_verify_traffic; security_cleanup")

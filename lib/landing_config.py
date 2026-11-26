@@ -11,6 +11,7 @@ HTTP = "\nhttp {\n"
 
 
 def check_names(domain, xray_path, transports):
+    domain = domain.lower()
     if not re.fullmatch(r"[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*", domain):
         raise ValueError("Invalid landing page domain")
     inbounds = json.loads(Path(xray_path).read_text())["inbounds"]
@@ -31,7 +32,14 @@ def render(text, domain, port):
     routes = text.split(MAP, 1)[1].split("}", 1)[0]
     for row in routes.splitlines():
         fields = row.partition("#")[0].split()
-        if fields and fields[0].lower().rstrip(".") == domain:
+        if not fields:
+            continue
+        name = fields[0].lower().rstrip(".")
+        if name.startswith("~"):
+            raise ValueError("Custom stream regex requires operator review")
+        if fnmatch.fnmatchcase(domain.lower(), name) or (
+            name.startswith(".") and (domain.lower().endswith(name) or domain.lower() == name[1:])
+        ):
             raise ValueError(f"Landing page domain {domain} already has a stream route")
     if not (port.isascii() and port.isdecimal() and 0 < int(port) <= 65535):
         raise ValueError("Invalid public VPN port")
@@ -68,7 +76,6 @@ def render(text, domain, port):
 if __name__ == "__main__":
     try:
         action, domain, port, xray, *transports = sys.argv[1:]
-        domain = domain.lower()
         check_names(domain, xray, transports)
         if action == "render":
             sys.stdout.write(render(sys.stdin.read(), domain, port))

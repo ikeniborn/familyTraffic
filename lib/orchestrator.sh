@@ -106,6 +106,10 @@ SHORT_ID=""
 # Returns: 0 on success, 1 on failure
 # =============================================================================
 orchestrate_installation() {
+    if [[ ${FT_SERVICE_MODE-} == both && -n ${FT_HTTPS_PROXY_PORT-} && -f $VLESS_DIR/.env && -f $XRAY_CONFIG ]]; then
+        echo 'Existing combined deployment detected. Use familytraffic-security reconcile to preserve its settings.' >&2
+        return 1
+    fi
     if [[ -f "$USERS_JSON" ]] && ! jq -e '.users | type == "array" and length == 0' "$USERS_JSON" >/dev/null 2>&1; then
         echo 'Existing users detected. Use familytraffic-security reconcile with a prebuilt image instead of the fresh installer.' >&2
         return 1

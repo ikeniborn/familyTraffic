@@ -72,6 +72,7 @@ RUN apk upgrade --no-cache \
 
 # Copy xray binary from Stage 1
 COPY --from=xray-src /usr/bin/xray /usr/bin/xray
+RUN mkdir -p /usr/share/familytraffic && chmod 755 /usr/share/familytraffic
 COPY --chmod=444 docker/familytraffic/xray/landing.html /usr/share/familytraffic/landing.html
 
 # Copy mtg binary from Stage 2

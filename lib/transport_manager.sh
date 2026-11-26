@@ -54,8 +54,7 @@ _init_transports_json() {
 #   $2 - subdomain: e.g., ws.example.com
 # Returns: 0 on success, 1 on failure
 # ============================================================================
-add_transport() {
-    validate_transport_deployment || return 1
+_edit_add_transport() {
     local transport_type="$1"
     local subdomain="$2"
 
@@ -63,7 +62,7 @@ add_transport() {
         log_error "A configured certificate domain is required to add a TLS transport"
         return 1
     fi
-    _init_transports_json
+    _init_transports_json || return 1
 
     # Validate type
     case "$transport_type" in
@@ -105,7 +104,7 @@ add_transport() {
         log_error "transports.json update produced invalid JSON"
         return 1
     fi
-    write_preserving_inode "$temp" "$TRANSPORTS_JSON"
+    write_preserving_inode "$temp" "$TRANSPORTS_JSON" || return 1
 
     log_success "Transport '$transport_type' registered: $subdomain → familytraffic:$port"
 
@@ -116,7 +115,7 @@ add_transport() {
 
     # Surgically append the new Tier 2 inbound to xray_config.json without touching existing clients.
     # IMPORTANT: do NOT call create_xray_config() here — it writes empty "clients": [] and erases users.
-    local xray_config="${XRAY_CONFIG:-/opt/familytraffic/config/xray_config.json}"
+    local xray_config="${transport_xray:-${XRAY_CONFIG:-/opt/familytraffic/config/xray_config.json}}"
     if [[ ! -f "$xray_config" ]]; then
         log_error "xray_config.json not found: $xray_config"
         return 1
@@ -156,12 +155,14 @@ add_transport() {
             log_error "xray_config.json update produced invalid JSON"
             return 1
         fi
-        write_preserving_inode "$xray_temp" "$xray_config"
+        write_preserving_inode "$xray_temp" "$xray_config" || return 1
         log_success "Inbound '$inbound_tag' appended to xray_config.json (existing users preserved)"
     fi
 
     # Rebuild Nginx config with all current transport subdomains
     _regenerate_nginx_config || return 1
+
+    [[ -z $transport_xray ]] || return 0
 
     # Reload containers
     log_info "Reloading containers..."
@@ -182,7 +183,7 @@ add_transport() {
 _regenerate_nginx_config() {
     local cert_domain="${CERT_DOMAIN:-${VLESS_DOMAIN:-${DOMAIN:-}}}"
 
-    local nginx_conf_dir="${VLESS_DIR:-/opt/familytraffic}/config/nginx"
+    local nginx_conf_dir="${transport_nginx_dir:-${VLESS_DIR:-/opt/familytraffic}/config/nginx}"
     mkdir -p "$nginx_conf_dir" || {
         log_error "Failed to create $nginx_conf_dir"
         return 1
@@ -218,7 +219,7 @@ _regenerate_nginx_config() {
     local tmp_conf="${nginx_conf_dir}/nginx.conf.tmp"
     if generate_nginx_config "$cert_domain" "$has_tier2" "$ws_sub" "$xhttp_sub" "$grpc_sub" "$enable_cloak" "$enable_notls" \
         > "$tmp_conf"; then
-        write_preserving_inode "$tmp_conf" "${nginx_conf_dir}/nginx.conf"
+        write_preserving_inode "$tmp_conf" "${nginx_conf_dir}/nginx.conf" || return 1
         log_success "nginx.conf regenerated"
     else
         rm -f "$tmp_conf"
@@ -274,11 +275,10 @@ list_transports() {
 #   $1 - transport_type: ws|xhttp|grpc
 # Returns: 0 on success, 1 on failure
 # ============================================================================
-remove_transport() {
-    validate_transport_deployment || return 1
+_edit_remove_transport() {
     local transport_type="$1"
 
-    _init_transports_json
+    _init_transports_json || return 1
 
     local existing
     existing=$(jq -r --arg t "$transport_type" '.transports[] | select(.type == $t) | .subdomain' "$TRANSPORTS_JSON")
@@ -298,12 +298,12 @@ remove_transport() {
         log_error "transports.json update produced invalid JSON"
         return 1
     fi
-    write_preserving_inode "$temp" "$TRANSPORTS_JSON"
+    write_preserving_inode "$temp" "$TRANSPORTS_JSON" || return 1
 
     log_success "Transport '$transport_type' removed from transports.json"
 
     # Remove inbound from xray_config.json
-    local xray_config="${XRAY_CONFIG:-/opt/familytraffic/config/xray_config.json}"
+    local xray_config="${transport_xray:-${XRAY_CONFIG:-/opt/familytraffic/config/xray_config.json}}"
     local tag
     case "$transport_type" in
         ws)    tag="vless-websocket" ;;
@@ -321,7 +321,7 @@ remove_transport() {
             log_error "xray_config.json update produced invalid JSON"
             return 1
         fi
-        write_preserving_inode "$xray_temp" "$xray_config"
+        write_preserving_inode "$xray_temp" "$xray_config" || return 1
         log_success "Removed inbound '$tag' from xray_config.json"
     else
         log_warning "xray_config.json not found — skipping inbound removal"
@@ -331,7 +331,9 @@ remove_transport() {
     local lib_dir
     lib_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
     [[ -f "${lib_dir}/nginx_stream_generator.sh" ]] && source "${lib_dir}/nginx_stream_generator.sh"
-    _regenerate_nginx_config || log_warning "Failed to regenerate nginx.conf after removal"
+    _regenerate_nginx_config || return 1
+
+    [[ -z $transport_xray ]] || return 0
 
     # Reload containers
     docker restart familytraffic 2>/dev/null && log_success "familytraffic restarted" || \
@@ -341,6 +343,87 @@ remove_transport() {
 
     log_success "Transport '$transport_type' ($existing) removed successfully"
     return 0
+}
+
+_restart_transport_service() {
+    docker restart familytraffic >/dev/null || return 1
+    local attempt
+    for ((attempt=0; attempt<30; attempt++)); do
+        docker exec familytraffic /etc/familytraffic/healthcheck.sh >/dev/null 2>&1 && return 0
+        sleep 1
+    done
+    return 1
+}
+
+_change_transport() (
+    local edit=$1 transport_xray='' transport_nginx_dir=''
+    shift
+    validate_transport_deployment || return 1
+    if [[ ${FT_SERVICE_MODE-} != both || -z ${FT_HTTPS_PROXY_PORT-} ]]; then
+        "$edit" "$@"
+        return
+    fi
+    if [[ ${FT_LEGACY_SERVICE_SETTINGS:-false} == true ]]; then
+        log_error "Reconcile the combined installation with the current image before changing transports"
+        return 1
+    fi
+    local active_xray=${XRAY_CONFIG:-/opt/familytraffic/config/xray_config.json}
+    local active_nginx=${VLESS_DIR:-/opt/familytraffic}/config/nginx/nginx.conf
+    local active_transports=$TRANSPORTS_JSON work image
+    local domain_file=${VLESS_HOME:-/opt/familytraffic}/.env
+    local DOMAIN
+    DOMAIN=$(sed -n 's/^DOMAIN=//p' "$domain_file") || return 1
+    local CERT_DOMAIN=$DOMAIN
+    # Serialize edits to the same user-bearing Xray file.
+    exec 9>"${LOCK_FILE:-/var/lock/familytraffic_users.lock}" || return 1
+    flock -x 9 || return 1
+    umask 077
+    work=$(mktemp -d) || return 1
+    local publishing=false
+    cleanup_transport_change() {
+        local status=$?
+        trap - EXIT INT TERM
+        if [[ $publishing == true ]]; then
+            if ! { cat "$work/old-xray" > "$active_xray" &&
+                cat "$work/old-nginx" > "$active_nginx" &&
+                if [[ -f $work/old-transports ]]; then cat "$work/old-transports" > "$active_transports"; else rm -f -- "$active_transports"; fi &&
+                _restart_transport_service; }; then
+                log_error "Transport rollback failed. Recovery files: $work"
+                exit 1
+            fi
+        fi
+        rm -rf -- "$work"
+        exit "$status"
+    }
+    trap cleanup_transport_change EXIT
+    trap 'exit 1' INT TERM
+    transport_xray=$work/xray.json
+    transport_nginx_dir=$work
+    local TRANSPORTS_JSON=$work/transports.json
+    cp "$active_xray" "$work/old-xray" && cp "$active_nginx" "$work/old-nginx" || return 1
+    cp "$work/old-xray" "$transport_xray" && cp "$work/old-nginx" "$work/nginx.conf" || return 1
+    if [[ -f $active_transports ]]; then
+        cp "$active_transports" "$work/old-transports" && cp "$work/old-transports" "$TRANSPORTS_JSON" || return 1
+    fi
+    python3 "$(dirname "${BASH_SOURCE[0]}")/landing_config.py" render "$DOMAIN" "$FT_VLESS_PUBLIC_PORT" \
+        "$transport_xray" < "$work/old-nginx" > /dev/null || return 1
+    "$edit" "$@" || return 1
+    image=$(docker inspect -f '{{.Image}}' familytraffic) || return 1
+    docker exec familytraffic test -r /usr/share/familytraffic/landing.html || return 1
+    docker run --rm --network none --pull never --entrypoint xray -v "$transport_xray:/tmp/xray.json:ro" "$image" run -test -config /tmp/xray.json >/dev/null || return 1
+    docker run --rm --network none --pull never --entrypoint nginx -v "$work/nginx.conf:/etc/nginx/nginx.conf:ro" -v /etc/letsencrypt:/etc/letsencrypt:ro "$image" -t || return 1
+    publishing=true
+    cat "$transport_xray" > "$active_xray" && cat "$work/nginx.conf" > "$active_nginx" &&
+        cat "$TRANSPORTS_JSON" > "$active_transports" && _restart_transport_service || return 1
+    publishing=false
+)
+
+add_transport() {
+    _change_transport _edit_add_transport "$@"
+}
+
+remove_transport() {
+    _change_transport _edit_remove_transport "$@"
 }
 
 export -f add_transport

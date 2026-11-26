@@ -82,7 +82,7 @@ render_proxy_listeners() {
 render_landing_config() {
     if [[ ${FT_SERVICE_MODE-} == both && -n ${FT_HTTPS_PROXY_PORT-} ]]; then
         python3 "$(dirname "${BASH_SOURCE[0]}")/landing_config.py" render "$1" "$FT_VLESS_PUBLIC_PORT" \
-            "${XRAY_CONFIG:-${VLESS_DIR:-/opt/familytraffic}/config/xray_config.json}" "${@:2}"
+            "${transport_xray:-${XRAY_CONFIG:-${VLESS_DIR:-/opt/familytraffic}/config/xray_config.json}}" "${@:2}"
     else
         cat
     fi
