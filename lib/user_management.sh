@@ -1463,12 +1463,8 @@ get_server_ip() {
 # Note: v3.3 - Uses socks5s:// (TLS) for public proxy, socks5:// for localhost
 # =============================================================================
 proxy_authority() {
-    local scheme=$1 host=$2 port=$3
-    if [[ $scheme == https && $port == 443 ]]; then
-        printf '%s\n' "$host"
-    else
-        printf '%s:%s\n' "$host" "$port"
-    fi
+    local host=$2 port=$3
+    printf '%s:%s\n' "$host" "$port"
 }
 
 proxy_client_address() {

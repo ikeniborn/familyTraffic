@@ -6,9 +6,10 @@
 2. Accept the displayed ports or enter free TCP ports. The HTTPS default is 443 on a proxy-only host and 8118 on a combined host.
 3. Enable SOCKS5 over TLS if required. Its default port is 1080. Enable plaintext listeners only on an appropriate network.
 4. For a TLS proxy, supply the server domain and certificate contact email. For VPN, select the Reality destination.
-5. Review the service and port summary. Add a user with the installed management CLI. A fresh proxy refuses forwarding until it has an authorized user.
+5. Enter a trusted source IP or CIDR to grant access to all inbound host ports and protocols. Leave it empty to allow TCP 22 from any address.
+6. Review the service and port summary. Add a user with the installed management CLI. A fresh proxy refuses forwarding until it has an authorized user.
 
-The optional connection type for user creation is `vpn`, `proxy`, or `both`. Client files contain the public ports selected during installation.
+The optional connection type for user creation is `vpn`, `proxy`, or `both`. Generated HTTPS proxy links include the selected port, including `:443` on a default proxy-only installation.
 
 ## Open the public website
 

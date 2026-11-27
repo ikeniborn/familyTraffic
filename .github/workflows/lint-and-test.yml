@@ -145,6 +145,10 @@ jobs:
         env:
           FT_TRAFFIC_IMAGE: familytraffic:proxy-security
         run: bash tests/monitoring/run.sh
+      - name: Verify trusted host access and SSH with real UFW
+        env:
+          FT_UFW_TEST_IMAGE: familytraffic-security-node:local
+        run: python3 tests/integration/test_installer_firewall.py
       - name: Preserve traffic acceptance evidence
         if: always()
         uses: actions/upload-artifact@v4
