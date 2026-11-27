@@ -14,6 +14,8 @@ git -C "$workspace" checkout -q --detach FETCH_HEAD
 [ "$(git -C "$workspace" rev-parse HEAD)" = "$revision" ]
 git -C "$workspace" apply --check "$resources/auth-journal.patch"
 git -C "$workspace" apply "$resources/auth-journal.patch"
+git -C "$workspace" apply "$resources/landing-page.patch"
+cp "$resources/landing.html" "$workspace/proxy/http/landing.html"
 cd "$workspace"
 case "$mode" in
     focused) go test -race ./common/ftauth ./proxy/http ./proxy/socks ;;

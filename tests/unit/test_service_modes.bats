@@ -259,3 +259,86 @@ ENV
     [ "$status" -eq 0 ]
     [[ "$output" != *'listen 80 '* ]]
 }
+
+@test "combined browser route preserves Reality and refuses an overlapping server name" {
+    source "$BATS_TEST_DIRNAME/../../lib/nginx_stream_generator.sh"
+    export FT_SERVICE_MODE=both FT_VLESS_PUBLIC_PORT=443 FT_HTTPS_PROXY_PORT=8118
+    export XRAY_CONFIG="$root/config/xray_config.json"
+    echo '{"inbounds":[{"tag":"vless-reality","streamSettings":{"realitySettings":{"serverNames":["vpn.test","Alt.test"]}}}]}' > "$XRAY_CONFIG"
+    run generate_nginx_config service.test
+    [ "$status" = 0 ]
+    [[ $output == *'service.test unix:/run/familytraffic-landing.sock;'* ]]
+    [[ $output == *'default             127.0.0.1:8443;'* ]]
+    run generate_nginx_config alt.test
+    [ "$status" != 0 ]
+    [[ $output == *'alt.test'* ]]
+    run generate_nginx_config service.test true service.test
+    [ "$status" != 0 ]
+}
+
+@test "transport collision and rejected restart preserve the installed combined configuration" {
+    export VLESS_HOME="$root" VLESS_DIR="$root" XRAY_CONFIG="$root/config/xray_config.json" LOCK_FILE="$root/users.lock"
+    mkdir -p "$root/data"
+    source "$BATS_TEST_DIRNAME/../../lib/common.sh"
+    source "$BATS_TEST_DIRNAME/../../lib/transport_manager.sh"
+    source "$BATS_TEST_DIRNAME/../../lib/nginx_stream_generator.sh"
+    proxy_settings
+    sed -i 's/=proxy$/=both/;s/FT_VLESS_PUBLIC_PORT=$/FT_VLESS_PUBLIC_PORT=443/;s/FT_HTTPS_PROXY_PORT=443/FT_HTTPS_PROXY_PORT=8118/' "$root/.env"
+    echo DOMAIN=service.test >> "$root/.env"
+    echo '{"inbounds":[{"tag":"vless-reality","streamSettings":{"realitySettings":{"serverNames":["vpn.test"]}}}]}' > "$XRAY_CONFIG"
+    load_service_settings "$root"
+    generate_nginx_config service.test > "$root/config/nginx/nginx.conf"
+    local before
+    before=$(sha256sum "$XRAY_CONFIG" "$root/config/nginx/nginx.conf")
+    log_info() { :; }
+    log_error() { echo "$*"; }
+    log_success() { :; }
+    log_warning() { :; }
+    docker() {
+        case "$1" in
+            inspect) echo fixture-image ;;
+            restart) if [[ ! -e $root/restart ]]; then touch "$root/restart"; return 1; fi ;;
+            *) return 0 ;;
+        esac
+    }
+    chmod 644 "$XRAY_CONFIG"
+    run add_transport ws SERVICE.test
+    [ "$status" != 0 ]
+    [[ "$output" == *conflict* ]]
+    [ ! -e "$TRANSPORTS_JSON" ]
+    [ ! -e "$root/restart" ]
+    run add_transport ws ws.service.test
+    [ "$status" != 0 ]
+    [ -e "$root/restart" ]
+    [ "$(stat -c %a "$XRAY_CONFIG")" = 600 ]
+    [ ! -e "$TRANSPORTS_JSON" ]
+    [ "$(sha256sum "$XRAY_CONFIG" "$root/config/nginx/nginx.conf")" = "$before" ]
+    chmod 644 "$XRAY_CONFIG"
+    add_transport ws ws.service.test
+    [ "$(stat -c %a "$XRAY_CONFIG")" = 600 ]
+    grep -q ws.service.test "$root/config/nginx/nginx.conf"
+    remove_transport ws
+    [ "$(cat "$TRANSPORTS_JSON" | jq '.transports | length')" = 0 ]
+    grep -q familytraffic-landing.sock "$root/config/nginx/nginx.conf"
+}
+
+@test "legacy combined staging is idempotent and rejects an ambiguous active VPN name" {
+    source "$BATS_TEST_DIRNAME/../../lib/nginx_stream_generator.sh"
+    source "$BATS_TEST_DIRNAME/../../scripts/familytraffic-security"
+    SECURITY_LIB="$BATS_TEST_DIRNAME/../../lib"
+    SECURITY_ROOT="$root" SECURITY_XRAY="$root/config/xray_config.json"
+    echo DOMAIN=Service.test > "$root/.env"
+    echo '{"inbounds":[{"tag":"vless-reality","protocol":"vless","port":8443,"streamSettings":{"realitySettings":{"serverNames":["vpn.test"]}}},{"tag":"http-proxy","protocol":"http","port":18118},{"tag":"socks5-proxy","protocol":"socks","port":10800}]}' > "$SECURITY_XRAY"
+    generate_nginx_config Service.test > "$root/config/nginx/nginx.conf"
+    load_service_settings "$root"
+    [ "$FT_LEGACY_SERVICE_SETTINGS" = true ]
+    security_stage_nginx "$root/config/nginx/nginx.conf" "$root/staged" false
+    grep -q '/live/Service.test/fullchain.pem' "$root/staged"
+    security_stage_nginx "$root/staged" "$root/again" false
+    cmp "$root/staged" "$root/again"
+    sed -i 's/vpn.test/service.test/' "$SECURITY_XRAY"
+    run security_stage_nginx "$root/config/nginx/nginx.conf" "$root/rejected" false
+    [ "$status" != 0 ]
+    [ ! -e "$root/rejected" ]
+    ! grep -q familytraffic-landing.sock "$root/config/nginx/nginx.conf"
+}

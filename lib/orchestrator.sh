@@ -107,6 +107,10 @@ SHORT_ID=""
 # Returns: 0 on success, 1 on failure
 # =============================================================================
 orchestrate_installation() {
+    if [[ ${FT_SERVICE_MODE-} == both && -n ${FT_HTTPS_PROXY_PORT-} && -f $VLESS_DIR/.env && -f $XRAY_CONFIG ]]; then
+        echo 'Existing combined deployment detected. Use familytraffic-security reconcile to preserve its settings.' >&2
+        return 1
+    fi
     if [[ -f "$USERS_JSON" ]] && ! jq -e '.users | type == "array" and length == 0' "$USERS_JSON" >/dev/null 2>&1; then
         echo 'Existing users detected. Use familytraffic-security reconcile with a prebuilt image instead of the fresh installer.' >&2
         return 1
@@ -1580,6 +1584,7 @@ install_cli_tools() {
     local copied_count=0
     local skipped_count=0
 
+    install -m 644 "$project_root/lib/landing_config.py" "${INSTALL_ROOT}/lib/landing_config.py" || return 1
     install -m 644 "$project_root/lib/service_settings.py" "${INSTALL_ROOT}/lib/service_settings.py" || return 1
     # Copy all *.sh files from lib/
     for lib_file in "${project_root}/lib/"*.sh; do
