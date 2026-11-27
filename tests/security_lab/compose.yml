@@ -8,9 +8,15 @@ services:
       - ${FT_LAB_REPO}/lib:/repo/lib:ro
       - ${FT_LAB_REPO}/tests/security_lab:/repo/tests/security_lab:ro
       - ${FT_LAB_DIR}:/lab
-    networks: [lab]
+    networks:
+      lab:
+        aliases: [proxy.lab, ws.proxy.lab]
   proxy:
     image: ${FT_LAB_IMAGE}
+    environment:
+      DOMAIN: proxy.lab
+      FT_SERVICE_MODE: both
+      FT_HTTPS_PROXY_PORT: "8118"
     network_mode: service:node
     depends_on: [node]
     entrypoint: [/usr/bin/supervisord, -c, /etc/familytraffic/supervisord.conf]
@@ -26,7 +32,9 @@ services:
       - ${FT_LAB_REPO}/lib:/repo/lib:ro
       - ${FT_LAB_REPO}/tests/security_lab:/repo/tests/security_lab:ro
       - ${FT_LAB_DIR}:/lab:ro
-    networks: [lab]
+    networks:
+      lab:
+        aliases: [target.lab]
   valid:
     image: ${FT_LAB_NODE_IMAGE}
     volumes:

@@ -25,6 +25,7 @@ set -euo pipefail
 # Source Nginx and docker-compose generators
 # v5.30: nginx_stream_generator.sh (stream+http) replaced haproxy_config_manager.sh
 SCRIPT_DIR_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${SCRIPT_DIR_LIB}/common.sh"
 [[ -f "${SCRIPT_DIR_LIB}/nginx_stream_generator.sh" ]] && source "${SCRIPT_DIR_LIB}/nginx_stream_generator.sh"
 
 # =============================================================================
@@ -106,6 +107,10 @@ SHORT_ID=""
 # Returns: 0 on success, 1 on failure
 # =============================================================================
 orchestrate_installation() {
+    if [[ ${FT_SERVICE_MODE-} == both && -n ${FT_HTTPS_PROXY_PORT-} && -f $VLESS_DIR/.env && -f $XRAY_CONFIG ]]; then
+        echo 'Existing combined deployment detected. Use familytraffic-security reconcile to preserve its settings.' >&2
+        return 1
+    fi
     if [[ -f "$USERS_JSON" ]] && ! jq -e '.users | type == "array" and length == 0' "$USERS_JSON" >/dev/null 2>&1; then
         echo 'Existing users detected. Use familytraffic-security reconcile with a prebuilt image instead of the fresh installer.' >&2
         return 1
@@ -807,9 +812,7 @@ EOF
         rm -f "$synced_config"
     fi
     # Preserve existing bind-mount inodes. Publish only fully authenticated JSON.
-    cat "$staged_config" > "$XRAY_CONFIG" || { rm -f "$staged_config"; return 1; }
-    rm -f "$staged_config"
-    chmod 600 "$XRAY_CONFIG" || return 1
+    write_preserving_inode "$staged_config" "$XRAY_CONFIG" 600 || { rm -f "$staged_config"; return 1; }
     chown root:root "$XRAY_CONFIG" 2>/dev/null || true
 
     echo -e "${GREEN}✓ Xray configuration created${NC}"
@@ -1581,6 +1584,7 @@ install_cli_tools() {
     local copied_count=0
     local skipped_count=0
 
+    install -m 644 "$project_root/lib/landing_config.py" "${INSTALL_ROOT}/lib/landing_config.py" || return 1
     install -m 644 "$project_root/lib/service_settings.py" "${INSTALL_ROOT}/lib/service_settings.py" || return 1
     # Copy all *.sh files from lib/
     for lib_file in "${project_root}/lib/"*.sh; do
@@ -1704,29 +1708,8 @@ set_permissions() {
         echo -e "  ${YELLOW}⚠ WARNING: nginx.conf not found at ${CONFIG_DIR}/nginx/nginx.conf${NC}" >&2
     fi
 
-    # EXCEPTION: Xray config must be world-readable (chmod 644)
-    # After v5.18, xray container runs as root (removed user: nobody from docker-compose)
-    if [[ -f "${XRAY_CONFIG}" ]]; then
-        echo "  → Setting permissions on ${XRAY_CONFIG}..."
-        chmod 644 "${XRAY_CONFIG}" 2>/dev/null || {
-            echo -e "  ${RED}✗ CRITICAL: Failed to chmod 644 ${XRAY_CONFIG}${NC}" >&2
-            echo -e "  ${RED}  This will cause familytraffic_xray container to fail!${NC}" >&2
-            return 1
-        }
-        # Verify permissions were set correctly
-        local xray_perms=$(stat -c '%a' "${XRAY_CONFIG}" 2>/dev/null || echo "000")
-        if [[ "$xray_perms" == "644" ]]; then
-            echo -e "  ${GREEN}✓ xray_config.json: 644 (readable by container)${NC}"
-        else
-            echo -e "  ${RED}✗ CRITICAL: xray_config.json: $xray_perms (EXPECTED 644)${NC}" >&2
-            echo -e "  ${RED}  familytraffic_xray container will fail to start!${NC}" >&2
-            return 1
-        fi
-    else
-        echo -e "  ${RED}✗ CRITICAL: XRAY_CONFIG not found: ${XRAY_CONFIG}${NC}" >&2
-        echo -e "  ${RED}  Variable: XRAY_CONFIG=${XRAY_CONFIG}${NC}" >&2
-        return 1
-    fi
+    # Xray runs as root and its configuration contains user credentials.
+    chmod 600 "${XRAY_CONFIG}" || return 1
 
     # Readable directories: 755
     chmod 755 "${LOGS_DIR}" "${SCRIPTS_DIR}" "${FAKESITE_DIR}" \
@@ -1803,12 +1786,11 @@ verify_file_permissions() {
     # Check xray_config.json (CRITICAL)
     if [[ -f "${XRAY_CONFIG}" ]]; then
         local xray_perms=$(stat -c '%a' "${XRAY_CONFIG}" 2>/dev/null || echo "000")
-        if [[ "$xray_perms" == "644" ]]; then
-            echo -e "  ${GREEN}✓ xray_config.json: 644 (OK)${NC}"
+        if [[ "$xray_perms" == "600" ]]; then
+            echo -e "  ${GREEN}✓ xray_config.json: 600 (OK)${NC}"
         else
-            echo -e "  ${RED}✗ CRITICAL: xray_config.json: $xray_perms (EXPECTED 644)${NC}"
-            echo -e "  ${RED}  → familytraffic_xray container will fail to start!${NC}"
-            echo -e "  ${YELLOW}  → Manual fix: sudo chmod 644 ${XRAY_CONFIG}${NC}"
+            echo -e "  ${RED}✗ CRITICAL: xray_config.json: $xray_perms (EXPECTED 600)${NC}"
+            echo -e "  ${YELLOW}  → Manual fix: sudo chmod 600 ${XRAY_CONFIG}${NC}"
             ((ISSUES++))
         fi
     else

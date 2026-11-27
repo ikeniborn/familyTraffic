@@ -90,7 +90,7 @@ def prepare():
     certs.mkdir()
     (LAB / "logs").mkdir()
     (LAB / "logs/auth.log").touch(mode=0o600)
-    command(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1", "-subj", "/CN=proxy.lab", "-addext", "subjectAltName=DNS:proxy.lab,DNS:target.lab", "-keyout", str(certs / "privkey.pem"), "-out", str(certs / "fullchain.pem")])
+    command(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1", "-subj", "/CN=proxy.lab", "-addext", "subjectAltName=DNS:proxy.lab,DNS:target.lab,DNS:ws.proxy.lab", "-keyout", str(certs / "privkey.pem"), "-out", str(certs / "fullchain.pem")])
     key_output = command(["docker", "run", "--rm", "--network", "none", "--entrypoint", "/usr/bin/xray", IMAGE, "x25519"]).stdout
     private = re.search(r"Private key: (\S+)", key_output).group(1)
     public = re.search(r"Public key: (\S+)", key_output).group(1)
@@ -313,6 +313,66 @@ class ProxySecurityTests(unittest.TestCase):
         time.sleep(1.5)
         self.lab.wait_banned("offender", False)
         self.lab.fetch("offender")
+
+
+    def test_13_public_page_preserves_existing_clients(self):
+        config_path = LAB / "xray.json"
+        config = json.loads(config_path.read_text())
+        reality = config["inbounds"][2]
+        reality["tag"] = "vless-reality"
+        config["inbounds"].append({
+            "tag": "vless-websocket", "protocol": "vless", "listen": "127.0.0.1", "port": 8444,
+            "settings": {"clients": [{"id": reality["settings"]["clients"][0]["id"]}], "decryption": "none"},
+            "streamSettings": {"network": "ws", "wsSettings": {"path": "/vless-ws"}},
+        })
+        config_path.write_text(json.dumps(config))
+        generator = 'source "$1/lib/nginx_stream_generator.sh"; generate_nginx_config proxy.lab true ws.proxy.lab "" "" false true'
+        args = ["bash", "-ec", generator, "bash", str(ROOT)]
+        nginx = LAB / "nginx.conf"
+        nginx.write_text(command(args).stdout)
+        self.lab.compose("restart", "proxy")
+        curl = ["exec", "-T", "valid", "curl", "-sS", "--retry", "8", "--retry-connrefused", "--retry-delay", "1",
+                "--max-time", "10", "--cacert", "/lab/certs/fullchain.pem", "--proxy-cacert", "/lab/certs/fullchain.pem"]
+        def transfer():
+            actual = self.lab.compose(*curl, "--retry-all-errors", "--proxy", "socks5h://127.0.0.1:1082", "http://target.lab/controlled").stdout
+            self.assertEqual(actual, "controlled TLS target\n")
+        def websocket():
+            # A valid upgrade proves the Tier 2 route still reaches the Xray WS receiver.
+            response = self.lab.compose(*curl, "--http1.1", "-i", "-H", "Connection: Upgrade", "-H", "Upgrade: websocket",
+                                        "-H", "Sec-WebSocket-Version: 13", "-H", "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==",
+                                        "--retry", "0", "--no-buffer", "--max-time", "2", "https://ws.proxy.lab/vless-ws", check=False)
+            self.assertIn("101 Switching Protocols", response.stdout)
+        def count():
+            return int(self.lab.compose("exec", "-T", "target", "wc", "-l", "/tmp/controlled-requests").stdout.split()[0])
+        transfer()
+        websocket()
+        settings = dict(os.environ, FT_SERVICE_MODE="both", FT_VLESS_PUBLIC_PORT="443", FT_HTTPS_PROXY_PORT="8118", XRAY_CONFIG=str(config_path))
+        nginx.write_text(command(args, env=settings).stdout)
+        self.lab.compose("exec", "-T", "proxy", "nginx", "-s", "reload")
+        for restart in (False, True):
+            if restart:
+                self.lab.compose("restart", "proxy")
+            transfer()
+            websocket()
+            journal = self.lab.events()
+            hits = count()
+            for port in ("443", "8118"):
+                page = self.lab.compose(*curl, "--fail", f"https://proxy.lab:{port}/?visit").stdout
+                self.assertEqual(page, (ROOT / "docker/familytraffic/xray/landing.html").read_text())
+            self.assertEqual(self.lab.events(), journal)
+            self.assertEqual(count(), hits)
+            for scheme in ("http", "https"):
+                target = f"{scheme}://target.lab/controlled"
+                proxy = ["--proxy", "https://proxy.lab:8118"]
+                for auth in ([], ["--proxy-user", "fixture-user:incorrect"]):
+                    code = "%{http_connect}" if scheme == "https" else "%{http_code}"
+                    result = self.lab.compose(*curl, *proxy, *auth, "-o", "/dev/null", "-w", code, target, check=False)
+                    self.assertEqual(result.stdout, "407")
+                    self.assertEqual(count(), hits)
+                actual = self.lab.compose(*curl, *proxy, "--proxy-user", "fixture-user:fixture-password", target).stdout
+                self.assertEqual(actual, "controlled TLS target\n")
+                hits += 1
+                self.assertEqual(count(), hits)
 
 
 if __name__ == "__main__":

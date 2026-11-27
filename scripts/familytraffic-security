@@ -56,9 +56,9 @@ security_select_plaintext() {
 }
 
 security_stage_nginx() {
-    python3 - "$1" "$2" "$3" <<'PY'
+    python3 -B - "$1" "$2" "$3" "${SECURITY_LIB-}" "${SECURITY_ROOT-}" "${SECURITY_XRAY-}" <<'PY'
 import os,pathlib,re,sys
-source,target,notls=sys.argv[1:]
+source,target,notls,lib,root,xray=sys.argv[1:]
 text=pathlib.Path(source).read_text()
 if re.search(r'listen\s+[^;]*\bproxy_protocol\b',text):
     raise SystemExit('Public incoming PROXY protocol requires operator review')
@@ -129,6 +129,17 @@ if "map $server_port $traffic_service {" in text:
     rows = "".join(f"        {port} {label};\n" for port, label in sorted(entries, key=lambda row: order.index(row[1])))
     text = re.sub(r"(    map \$server_port \$traffic_service \{\n        default unknown;\n).*?(    \})",
                   lambda match: match[1] + rows + match[2], text, flags=re.S)
+if os.environ.get("FT_SERVICE_MODE") == "both" and os.environ.get("FT_HTTPS_PROXY_PORT"):
+    sys.path.insert(0,lib)
+    from landing_config import check_names, render
+    domains = [line[7:] for line in (pathlib.Path(root)/".env").read_text().splitlines() if line.startswith("DOMAIN=")]
+    if len(domains) != 1:
+        raise SystemExit("Expected one service domain in .env")
+    try:
+        check_names(domains[0], xray, [])
+        text = render(text, domains[0], os.environ["FT_VLESS_PUBLIC_PORT"])
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        raise SystemExit(str(error))
 pathlib.Path(target).write_text(text)
 PY
 }
@@ -160,7 +171,10 @@ security_reconcile() {
 security_image_capability() {
     local image="$1" marker
     marker=$(docker run --rm --pull never --network none --entrypoint cat "$image" /etc/familytraffic/auth-journal-capability) || return 1
-    [[ "$marker" == ft-auth-journal-v2 ]]
+    [[ "$marker" == ft-auth-journal-v2 ]] || return 1
+    if [[ -n ${FT_HTTPS_PROXY_PORT:-} ]]; then
+        docker run --rm --pull never --network none --entrypoint test "$image" -s /usr/share/familytraffic/landing.html
+    fi
 }
 
 security_user_fingerprint() {
@@ -177,6 +191,10 @@ security_preflight() {
         [[ -f "$command" && ! -L "$command" ]] || { echo "Missing or symlinked deployment file: $command" >&2; return 1; }
     done
     load_service_settings "$SECURITY_ROOT" || return 1
+    if [[ -n $FT_HTTPS_PROXY_PORT ]]; then
+        SECURITY_DOMAIN=$(sed -n 's/^DOMAIN=//p' "$SECURITY_ROOT/.env")
+        [[ $SECURITY_DOMAIN =~ ^[A-Za-z0-9.-]+$ ]] || { echo 'Expected one service domain in .env' >&2; return 1; }
+    fi
     SECURITY_IMAGE=$(docker image inspect --format '{{.Id}}' "$image") || return 1
     [[ "$SECURITY_IMAGE" =~ ^sha256:[a-f0-9]{64}$ ]] || return 1
     if SECURITY_OLD_IMAGE=$(docker inspect --format '{{.Image}}' familytraffic 2>/dev/null); then
@@ -287,9 +305,23 @@ for line in lines:
 if not written:
     if result and not result[-1].endswith('\n'):result[-1]+='\n'
     result.append('PROXY_NOTLS_ENABLED='+value+'\n')
+if os.environ.get('FT_LEGACY_SERVICE_SETTINGS') == 'true' and os.environ.get('FT_HTTPS_PROXY_PORT'):
+    if result and not result[-1].endswith('\n'): result[-1]+='\n'
+    for key in ('FT_SERVICE_MODE','FT_VLESS_PUBLIC_PORT','FT_HTTPS_PROXY_PORT','FT_SOCKS_TLS_PORT','FT_HTTP_PLAIN_PORT','FT_SOCKS_PLAIN_PORT'):
+        result.append(key+'='+os.environ[key]+'\n')
 with path.open('w') as out:out.write(''.join(result))
 PY
     (umask 077; printf 'services:\n  familytraffic:\n    image: %s\n' "$SECURITY_IMAGE" > "$SECURITY_OVERRIDE") || return 1
+    if [[ -n ${FT_HTTPS_PROXY_PORT:-} ]]; then
+        # Legacy Compose files can omit env_file. Pass only the managed inputs.
+        local key
+        {
+            printf '    environment:\n      DOMAIN: "%s"\n' "$SECURITY_DOMAIN"
+            for key in FT_SERVICE_MODE FT_HTTPS_PROXY_PORT FT_VLESS_PUBLIC_PORT FT_SOCKS_TLS_PORT FT_HTTP_PLAIN_PORT FT_SOCKS_PLAIN_PORT; do
+                printf '      %s: "%s"\n' "$key" "${!key}"
+            done
+        } >> "$SECURITY_OVERRIDE" || return 1
+    fi
     security_compose up -d --no-build --pull never familytraffic || return 1
     [[ "$(security_user_fingerprint)" == "$SECURITY_USER_HASH" ]]
 }
@@ -304,6 +336,16 @@ security_verify_traffic() {
     domain=$(sed -nE 's/^DOMAIN=([A-Za-z0-9.-]+)$/\1/p' "$SECURITY_ROOT/.env")
     if [[ -z ${FT_HTTPS_PROXY_PORT-8118} ]]; then domain=127.0.0.1; fi
     [[ -n "$domain" && "$domain" != *$'\n'* ]] || return 1
+    if [[ -n ${FT_HTTPS_PROXY_PORT:-} ]]; then
+        docker exec familytraffic cat /usr/share/familytraffic/landing.html > "$SECURITY_WORK/expected.html" || return 1
+        local port
+        for port in "$FT_HTTPS_PROXY_PORT" "${FT_VLESS_PUBLIC_PORT:-}"; do
+            [[ -n $port ]] || continue
+            curl --fail --silent --show-error --retry 10 --retry-connrefused --retry-delay 1 --max-time 5 \
+                --noproxy '*' --resolve "$domain:$port:127.0.0.1" "https://$domain:$port/" > "$SECURITY_WORK/actual.html" || return 1
+            cmp -s "$SECURITY_WORK/expected.html" "$SECURITY_WORK/actual.html" || return 1
+        done
+    fi
     # Keep credentials in a private curl config, outside argv and diagnostic output.
     python3 - "$SECURITY_XRAY" "$SECURITY_WORK/probe.curl" "$domain" "${FT_HTTPS_PROXY_PORT-8118}" "${FT_HTTP_PLAIN_PORT-}" <<'PY' || return 1
 import json,os,sys
@@ -444,7 +486,9 @@ security_rollback() {
     # Pin the rollback restart to the actual previous image, even if its old tag moved.
     printf 'services:\n  familytraffic:\n    image: %s\n' "$SECURITY_OLD_IMAGE" > "$SECURITY_WORK/rollback.yml" || failed=true
     if [[ "${SECURITY_EXISTED:-true}" == true ]]; then
-        (cd "$SECURITY_ROOT" && docker compose -f docker-compose.yml -f "$SECURITY_WORK/rollback.yml" up -d --no-build --pull never familytraffic) || failed=true
+        local -a previous_compose=(-f docker-compose.yml)
+        if [[ -f $SECURITY_OVERRIDE ]]; then previous_compose+=(-f "$SECURITY_OVERRIDE"); fi
+        (cd "$SECURITY_ROOT" && docker compose "${previous_compose[@]}" -f "$SECURITY_WORK/rollback.yml" up -d --no-build --pull never familytraffic) || failed=true
     else
         security_compose_with_old rm -f familytraffic || failed=true
     fi

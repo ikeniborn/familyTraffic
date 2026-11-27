@@ -1,0 +1,118 @@
+diff --git a/proxy/http/landing.go b/proxy/http/landing.go
+new file mode 100644
+index 0000000..2d210f7
+--- /dev/null
++++ b/proxy/http/landing.go
+@@ -0,0 +1,44 @@
++package http
++
++import (
++	_ "embed"
++	"fmt"
++	"io"
++	"net"
++	"net/http"
++	"os"
++	"strconv"
++	"strings"
++)
++
++//go:embed landing.html
++var landingPage string
++
++// Only answer an origin-form request on the configured TLS proxy listener.
++// Nginx supplies that listener's port in PROXY protocol, independently of Host.
++func serveLanding(w io.Writer, req *http.Request, tag string, local net.Addr) (bool, error) {
++	if tag != "http-proxy" || (req.Method != http.MethodGet && req.Method != http.MethodHead) ||
++		!strings.HasPrefix(req.RequestURI, "/") || req.URL.IsAbs() || req.URL.Host != "" {
++		return false, nil
++	}
++	mode := os.Getenv("FT_SERVICE_MODE")
++	domain := os.Getenv("DOMAIN")
++	addr, ok := local.(*net.TCPAddr)
++	if (mode != "proxy" && mode != "both") || domain == "" || !ok || addr.Port == 18118 {
++		return false, nil
++	}
++	port := strconv.Itoa(addr.Port)
++	if port != os.Getenv("FT_HTTPS_PROXY_PORT") ||
++		!(strings.EqualFold(req.Host, net.JoinHostPort(domain, port)) || (port == "443" && strings.EqualFold(req.Host, domain))) {
++		return false, nil
++	}
++	status, body := "200 OK", landingPage
++	if path, _, _ := strings.Cut(req.RequestURI, "?"); path != "/" {
++		status, body = "404 Not Found", ""
++	}
++	_, err := fmt.Fprintf(w, "HTTP/1.1 %s\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: %d\r\nConnection: close\r\n\r\n", status, len(body))
++	if err == nil && req.Method != http.MethodHead && len(body) > 0 {
++		_, err = io.WriteString(w, body)
++	}
++	return true, err
++}
+diff --git a/proxy/http/landing_test.go b/proxy/http/landing_test.go
+new file mode 100644
+index 0000000..d962704
+--- /dev/null
++++ b/proxy/http/landing_test.go
+@@ -0,0 +1,47 @@
++package http
++
++import (
++	"bufio"
++	"bytes"
++	"fmt"
++	"net"
++	"net/http"
++	"strings"
++	"testing"
++)
++
++func TestLandingRequests(t *testing.T) {
++	t.Setenv("FT_SERVICE_MODE", "proxy")
++	t.Setenv("DOMAIN", "service.test")
++	for _, c := range []struct {
++		method, target, host string
++		ingress, https, want int
++	}{
++		{"GET", "/", "SERVICE.test", 443, 443, 200},
++		{"HEAD", "/?v=1", "service.test:9440", 9440, 9440, 200},
++		{"GET", "/missing", "service.test", 443, 443, 404},
++		{"GET", "/", "service.test", 9119, 443, 0},
++		{"GET", "/", "service.test:9440", 18118, 9440, 0},
++		{"GET", "/", "other.test", 443, 443, 0},
++		{"GET", "/", "service.test", 9440, 9440, 0},
++		{"GET", "http://service.test/", "service.test", 443, 443, 0},
++		{"CONNECT", "service.test:443", "service.test:443", 443, 443, 0},
++	} {
++		t.Setenv("FT_HTTPS_PROXY_PORT", fmt.Sprint(c.https))
++		req, err := http.ReadRequest(bufio.NewReader(strings.NewReader(fmt.Sprintf("%s %s HTTP/1.1\r\nHost: %s\r\n\r\n", c.method, c.target, c.host))))
++		if err != nil {
++			t.Fatal(err)
++		}
++		var w bytes.Buffer
++		handled, err := serveLanding(&w, req, "http-proxy", &net.TCPAddr{Port: c.ingress})
++		if err != nil || handled != (c.want != 0) {
++			t.Fatalf("%+v handled=%v err=%v", c, handled, err)
++		}
++		if handled {
++			res, err := http.ReadResponse(bufio.NewReader(&w), req)
++			if err != nil || res.StatusCode != c.want {
++				t.Fatalf("%+v result=%v err=%v", c, res, err)
++			}
++		}
++	}
++}
+diff --git a/proxy/http/server.go b/proxy/http/server.go
+index f94edc9..6c143db 100644
+--- a/proxy/http/server.go
++++ b/proxy/http/server.go
+@@ -124,6 +124,10 @@ Start:
+ 		return trace
+ 	}
+ 
++	if handled, err := serveLanding(conn, request, inbound.Tag, conn.LocalAddr()); handled {
++		return err
++	}
++
+ 	if len(s.config.Accounts) > 0 {
+ 		user, pass, ok := parseBasicAuth(request.Header.Get("Proxy-Authorization"))
+ 		if !ok || !s.config.HasAccount(user, pass) {

@@ -37,6 +37,64 @@ probe_https() {
         "$@" --proxytunnel http://127.0.0.1/.well-known/acme-challenge/check
 }
 
+browse() {
+    local port=$1
+    shift
+    docker exec "$node" curl --silent --show-error --max-time 5 --noproxy '*' \
+        --resolve "service.test:$port:127.0.0.1" --cacert /etc/letsencrypt/live/service.test/fullchain.pem \
+        "$@" "https://service.test:$port/"
+}
+
+check_head() {
+    docker exec -i "$node" python3 - "$1" "$(wc -c < "$root/docker/familytraffic/xray/landing.html")" <<'PYTHON'
+import socket, ssl, sys
+port = int(sys.argv[1])
+context = ssl.create_default_context(cafile="/etc/letsencrypt/live/service.test/fullchain.pem")
+with context.wrap_socket(socket.create_connection(("127.0.0.1", port), timeout=5), server_hostname="service.test") as stream:
+    host = "service.test" if port == 443 else f"service.test:{port}"
+    stream.sendall(f"HEAD /?probe HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n".encode())
+    headers, body = stream.makefile("rb").read().split(b"\r\n\r\n", 1)
+    assert headers.startswith(b"HTTP/1.1 200 ") and body == b""
+    fields = dict(line.lower().split(b": ", 1) for line in headers.split(b"\r\n")[1:])
+    assert int(fields[b"content-length"]) == int(sys.argv[2])
+    assert b"proxy-authenticate" not in fields and b"location" not in fields
+PYTHON
+}
+
+check_proxy_page() {
+    local port=$FT_HTTPS_PROXY_PORT
+    browse "$port" --fail > "$work/page"
+    cmp "$work/page" "$root/docker/familytraffic/xray/landing.html"
+    check_head "$port"
+    [[ $(browse "$port" --request-target /missing -o /dev/null -w '%{http_code}') == 404 ]]
+    [[ $(browse "$port" --request-target "http://service.test:$port/" -o /dev/null -w '%{http_code}') == 407 ]]
+    if [[ -n $FT_HTTP_PLAIN_PORT ]]; then
+        [[ $(docker exec "$node" curl -sS -o /dev/null -w '%{http_code}' -H "Host: service.test:$port" "http://127.0.0.1:$FT_HTTP_PLAIN_PORT/") == 407 ]]
+    fi
+}
+
+check_unprovisioned_proxy() {
+    docker exec -d "$node" python3 -c '
+from http.server import BaseHTTPRequestHandler, HTTPServer
+class Target(BaseHTTPRequestHandler):
+    def do_GET(self):
+        with open("/tmp/landing-origin-hits", "a") as hits:
+            hits.write("hit\n")
+        self.send_response(200)
+        self.end_headers()
+HTTPServer(("127.0.0.1", 8765), Target).serve_forever()
+'
+    docker exec "$node" curl --noproxy '*' -fsS --retry 8 --retry-connrefused --retry-delay 1 http://127.0.0.1:8765/
+    local -a proxy=(--noproxy '' --proxy-cacert /etc/letsencrypt/live/service.test/fullchain.pem
+        --resolve "service.test:$FT_HTTPS_PROXY_PORT:127.0.0.1" --proxy "https://service.test:$FT_HTTPS_PROXY_PORT")
+    local code
+    code=$(docker exec "$node" curl -sS "${proxy[@]}" -o /dev/null -w '%{http_code}' --max-time 5 http://127.0.0.1:8765/)
+    [[ $code == 407 ]]
+    code=$(docker exec "$node" curl -s "${proxy[@]}" -o /dev/null -w '%{http_connect}' --max-time 5 https://127.0.0.1:8765/ || true)
+    [[ $code == 407 ]]
+    [[ $(docker exec "$node" cat /tmp/landing-origin-hits) == hit ]]
+}
+
 private=$(docker run --rm --network none --entrypoint xray "$image" x25519 | awk '/Private key:/ {print $3}')
 for selection in 'vpn 443 - - - -' 'vpn 9440 - - - -' 'proxy - 443 - - -' 'proxy - 9440 9100 9119 9101' 'both 443 8118 - - -' 'both 9440 9441 9100 - -'; do
     read -r FT_SERVICE_MODE vpn https socks plain_http plain_socks <<< "$selection"
@@ -57,14 +115,29 @@ for selection in 'vpn 443 - - - -' 'vpn 9440 - - - -' 'proxy - 443 - - -' 'proxy
         -v "$work/nginx.conf:/etc/nginx/nginx.conf:ro" -v "$XRAY_CONFIG:/etc/xray/config.json:ro" \
         -v "$work/certs:/etc/letsencrypt:ro" -v "$work/web:/var/www/html:ro" "$image")
     health
+    if [[ $FT_VLESS_PUBLIC_PORT != 443 && $FT_HTTPS_PROXY_PORT != 443 ]]; then
+        if docker exec "$node" nc -z 127.0.0.1 443; then echo 'Unexpected public 443 listener' >&2; exit 1; fi
+    fi
     if [[ $enable_proxy == true ]]; then
-        if probe_https >/dev/null 2>&1; then echo 'Anonymous request reached target' >&2; exit 1; fi
+        check_proxy_page
+        if [[ $FT_SERVICE_MODE == both ]]; then
+            browse "$FT_VLESS_PUBLIC_PORT" --fail > "$work/vpn-page"
+            cmp "$work/vpn-page" "$work/page"
+            check_head "$FT_VLESS_PUBLIC_PORT"
+        fi
+        check_unprovisioned_proxy
         printf '{"users":[{"username":"alice","connection_type":"proxy","proxy_password":"fixture-password"}]}' > "$USERS_JSON"
         (source "$root/lib/user_management.sh"; update_proxy_accounts alice fixture-password)
     fi
     docker restart "$node" >/dev/null
     health
     if [[ $enable_proxy == true ]]; then
+        check_proxy_page
+        if [[ $FT_SERVICE_MODE == both ]]; then
+            browse "$FT_VLESS_PUBLIC_PORT" --fail > "$work/vpn-page"
+            cmp "$work/vpn-page" "$work/page"
+            check_head "$FT_VLESS_PUBLIC_PORT"
+        fi
         [[ $(probe_https --proxy-user alice:fixture-password) == service-mode-target ]]
     fi
     docker exec "$node" supervisorctl stop xray >/dev/null

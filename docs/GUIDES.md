@@ -10,7 +10,17 @@
 
 The optional connection type for user creation is `vpn`, `proxy`, or `both`. Client files contain the public ports selected during installation.
 
+## Open the public website
 
+On a proxy-only installation with default ports, open `https://<domain>/`. In combined mode, the same page is available at `https://<domain>/` and `https://<domain>:8118/`. For custom ports, append the selected public port to the domain. HTTPS clients use 443 when the port is omitted.
+
+A direct GET or HEAD of the root opens the static page without a login, including before the first account is created. Unknown page paths return 404. Proxy forwarding still requires valid proxy credentials. VPN clients keep their existing links.
+
+For an existing TLS deployment, install the management scripts and libraries from the same release as the application image. Run the security reconciliation with the local immutable image ID. It validates the domain, certificates, runtime settings and browser responses. In combined mode the service domain must be distinct from every enabled Tier 2 hostname and Reality server name. If reconciliation reports a conflict, keep the existing client names and select a separate service domain with its certificate before retrying.
+
+```bash
+sudo familytraffic-security reconcile --image "$IMAGE_ID"
+```
 
 **v5.33** · [← README](../README.md)
 

@@ -6,6 +6,7 @@ import json
 import socket
 import ssl
 import struct
+import threading
 
 CA = "/lab/certs/fullchain.pem"
 USER = "fixture-user"
@@ -99,11 +100,15 @@ def main():
     if args.mode == "target":
         class Handler(BaseHTTPRequestHandler):
             def do_GET(self):
+                with open("/tmp/controlled-requests", "ab") as hits:
+                    hits.write(b"1\n")
                 self.send_response(200)
                 self.end_headers()
                 self.wfile.write(b"controlled TLS target\n")
             def log_message(self, *_):
                 pass
+        plain = ThreadingHTTPServer(("0.0.0.0", 80), Handler)
+        threading.Thread(target=plain.serve_forever, daemon=True).start()
         server = ThreadingHTTPServer(("0.0.0.0", 443), Handler)
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         context.load_cert_chain(CA, "/lab/certs/privkey.pem")
