@@ -5,6 +5,7 @@ import os
 import pathlib
 import subprocess
 import unittest
+import uuid
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
@@ -32,9 +33,42 @@ iptables -S ufw-user-input
 """)
         rules = [line for line in output.splitlines() if line.startswith("-A ")]
         self.assertIn("198.51.100.7", rules[0])
-        self.assertIn("203.0.113.7", rules[1])
+        self.assertEqual(rules[1], "-A ufw-user-input -s 203.0.113.7/32 -j ACCEPT")
         self.assertIn("--dport 22 -j DROP", rules[2])
         self.assertIn("--dport 443 -j ACCEPT", rules[3])
+
+    def test_trusted_client_reaches_host_service_before_and_after_reload(self):
+        image = os.environ["FT_UFW_TEST_IMAGE"]
+        network = "ft-firewall-" + uuid.uuid4().hex[:12]
+
+        def docker(*args):
+            return subprocess.check_output(["docker", *args], text=True, timeout=30).strip()
+
+        def container(*options):
+            node = docker("run", "-d", "--network", network, *options, image, "sleep", "infinity")
+            self.addCleanup(docker, "rm", "-f", node)
+            return node
+
+        def address(node):
+            return docker("inspect", "-f", "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}", node)
+
+        docker("network", "create", "--internal", network)
+        self.addCleanup(docker, "network", "rm", network)
+        server = container("--cap-add", "NET_ADMIN", "-v", f"{ROOT}:/repo:ro")
+        trusted, other = container(), container()
+        url = f"http://{address(server)}:9100/"
+        docker("exec", "-d", server, "python3", "-m", "http.server", "9100")
+        probe = ["curl", "-fsS", "--noproxy", "*", "--connect-timeout", "1", "-o", "/dev/null"]
+        docker("exec", other, *probe, "--retry", "5", "--retry-connrefused", url)
+        docker("exec", server, "bash", "-ec",
+               'source /repo/lib/installer_security.sh; configure_install_firewall "$1"', "bash", address(trusted))
+        for reload in (False, True):
+            if reload:
+                docker("exec", server, "ufw", "reload")
+            docker("exec", trusted, *probe, url)
+            with self.assertRaises(subprocess.CalledProcessError) as refused:
+                docker("exec", other, *probe, url)
+            self.assertEqual(refused.exception.returncode, 28)
 
     def test_duplicate_allow_behind_deny_is_reordered(self):
         output = self.node("""
@@ -68,7 +102,7 @@ ufw show added
         self.assertIn("ufw deny 22/tcp", output)
 
     def test_empty_and_single_family_rule_lists(self):
-        for seed, source in [("", "203.0.113.7"), ("", "2001:db8::7"), ("", ""),
+        for seed, source in [("", "203.0.113.7"), ("", "2001:db8::/64"), ("", "203.0.113.0/24"), ("", ""),
                              ("ufw allow from 2001:db8::1 to any port 443 proto tcp", "203.0.113.7"),
                              ("ufw allow from 203.0.113.1 to any port 443 proto tcp", "2001:db8::7")]:
             with self.subTest(seed=seed, source=source):
@@ -77,7 +111,7 @@ sed -i s/IPV6=no/IPV6=yes/ /etc/default/ufw
 {seed}
 configure_install_firewall '{source}'
 ufw status | grep -qx 'Status: active'
-verify_ssh_firewall_rules '{source}' 22
+verify_ssh_firewall_rules '{source}' {'any' if source else '22'}
 cp /etc/ufw/user.rules /tmp/first4
 cp /etc/ufw/user6.rules /tmp/first6
 configure_install_firewall '{source}'
@@ -171,7 +205,9 @@ ufw allow from 2001:db8::7 to any port 22 proto tcp
 ufw deny 22/tcp
 ufw --force enable
 SSH_CONNECTION='198.51.100.7 50000 192.0.2.1 2222' configure_install_firewall 2001:db8::7
-verify_ssh_firewall_rules 2001:db8::7 22
+ip6tables -C ufw6-user-input -s 2001:db8::7/128 -j ACCEPT
+ufw reload
+ip6tables -C ufw6-user-input -s 2001:db8::7/128 -j ACCEPT
 verify_ssh_firewall_rules 198.51.100.7 2222
 ip6tables -C ufw6-user-input -s 2001:db8::7/128 -p tcp --dport 22 -j ACCEPT
 """)

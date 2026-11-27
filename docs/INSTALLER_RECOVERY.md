@@ -14,20 +14,15 @@ If those sources disagree, inspect the reported field and restore a matching bac
 
 ## SSH and UFW
 
-The installer requests a numeric SSH source IP or CIDR for TCP port 22.
-An empty answer permits any address. `FT_SSH_ALLOW_FROM` supplies the same choice
-for unattended installation; an explicitly empty value permits any address.
+The installer accepts one trusted IPv4 or IPv6 address or CIDR. This source can
+reach all inbound host ports over all protocols in its address family. Leave the
+field empty to allow TCP port 22 from any address. For unattended installation,
+set `FT_SSH_ALLOW_FROM` to the trusted source or to an empty string for the SSH default.
 
-Existing UFW rules remain in place. The installer adds SSH permissions before
-enabling an inactive firewall. It also preserves the current SSH management
-source and port, including when sudo removed `SSH_CONNECTION` from its environment.
-Existing broader permissions remain broader; a new source choice does not remove them.
-
-Empty IPv4 and IPv6 rule lists require no manual preparation. The installer
-places managed SSH permissions before blocking rules. Existing ALLOW,
-DENY, REJECT, LIMIT, and unrelated rules remain
-in place after these SSH permissions. Repeated setup does not add duplicate
-permissions. Existing broader access remains available.
+The installer also preserves the current SSH peer on its actual TCP port, including
+when sudo removed `SSH_CONNECTION` from its environment. It places these managed
+permissions before existing blocking rules. Existing service and operator rules
+remain in place. Repeating setup with the same source does not duplicate the grant.
 
 For an active firewall, each affected address family's input chain is replaced
 in one iptables-restore transaction. Output and forwarding chains remain unchanged.
@@ -35,7 +30,7 @@ The installer retains current live rules, including entries added outside UFW.
 It validates both replacements before applying either one. If writing
 or applying rules fails, it restores the saved files and previous live input rules.
 IPv4 and IPv6 replacements are separate transactions with recovery on failure.
-An inactive firewall is enabled only after the resulting SSH permissions pass
+An inactive firewall is enabled only after the requested inbound permissions pass
 verification. Invalid input or an application failure still stops installation;
 ordinary existing-rule conflicts are resolved automatically.
 
