@@ -632,7 +632,11 @@ confirm_parameters() {
     [[ -z $FT_HTTP_PLAIN_PORT ]] || echo "  Plaintext HTTP: $FT_HTTP_PLAIN_PORT"
     [[ -z $FT_SOCKS_PLAIN_PORT ]] || echo "  Plaintext SOCKS5: $FT_SOCKS_PLAIN_PORT"
     echo "  Docker subnet: $DOCKER_SUBNET"
-    echo "  SSH port 22 source: ${SSH_ALLOW_FROM:-Any address} (existing rules preserved)"
+    if [[ -n ${SSH_ALLOW_FROM:-} ]]; then
+        echo "  Trusted firewall source (all inbound host ports and protocols): $SSH_ALLOW_FROM"
+    else
+        echo "  SSH (TCP 22): any source address"
+    fi
 
     # v5.32: Display DNS configuration (3 servers)
     if [[ -n "${DETECTED_DNS_PRIMARY}" ]]; then

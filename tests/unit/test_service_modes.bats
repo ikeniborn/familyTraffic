@@ -105,11 +105,18 @@ ENV
     echo 'DOMAIN=service.test' >> "$root/.env"
     load_service_settings "$root"
     export VLESS_HOME="$root" ENV_FILE="$root/.env" CLIENTS_DIR="$root/clients"
+    export USERS_JSON="$root/users.json"
     source "$BATS_TEST_DIRNAME/../../lib/user_management.sh"
+    echo '{"users":[{"username":"alice","connection_type":"proxy","proxy_password":"fixture-password"}]}' > "$USERS_JSON"
+    get_server_ip() { echo 192.0.2.1; }
+    for command in get_user_info show_proxy_credentials; do
+        run "$command" alice
+        [ "$status" -eq 0 ]
+        [[ "$output" == *'https://alice:fixture-password@service.test:443'* ]]
+    done
     export_all_proxy_configs alice fixture-password
-    [ "$(cat "$CLIENTS_DIR/alice/http_config.txt")" = 'https://alice:fixture-password@service.test' ]
-    run grep -rF 'service.test:443' "$CLIENTS_DIR/alice"
-    [ "$status" -eq 1 ]
+    [ "$(cat "$CLIENTS_DIR/alice/http_config.txt")" = 'https://alice:fixture-password@service.test:443' ]
+    grep -Fq 'https://alice:fixture-password@service.test:443' "$CLIENTS_DIR/alice/git_config.txt"
     [ "$(FT_HTTPS_PROXY_PORT=9443 proxy_client_address http)" = https://service.test:9443 ]
     [ "$(FT_HTTPS_PROXY_PORT='' FT_HTTP_PLAIN_PORT=443 proxy_client_address http)" = http://service.test:443 ]
     [ "$(FT_SOCKS_TLS_PORT=443 proxy_client_address socks5)" = socks5s://service.test:443 ]

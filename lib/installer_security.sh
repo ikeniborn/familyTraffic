@@ -15,10 +15,10 @@ PY
 prompt_ssh_source() {
     if [[ ${FT_SSH_ALLOW_FROM+x} ]]; then
         SSH_ALLOW_FROM="$FT_SSH_ALLOW_FROM"
-        validate_ssh_source "$SSH_ALLOW_FROM" || { echo 'Invalid SSH source address' >&2; return 1; }
+        validate_ssh_source "$SSH_ALLOW_FROM" || { echo 'Invalid trusted firewall source' >&2; return 1; }
     else
         while true; do
-            read -r -p 'SSH source IP or CIDR for port 22 (empty = any address): ' SSH_ALLOW_FROM || return 1
+            read -r -p 'Trusted IP or CIDR for all inbound host ports and protocols (empty = allow TCP 22 from any address): ' SSH_ALLOW_FROM || return 1
             validate_ssh_source "$SSH_ALLOW_FROM" && break
             echo 'Enter a numeric IPv4/IPv6 address or CIDR, or leave empty.' >&2
         done
@@ -52,28 +52,32 @@ from ufw.backend_iptables import UFWBackendIptables
 gettext.install('ufw')
 sys.argv[0]=shutil.which('ufw')
 backend=UFWBackendIptables(False)
-source,port=sys.argv[1],int(sys.argv[2])
+source,port=sys.argv[1:]
 networks=[source] if source else ['0.0.0.0/0']+(['::/0'] if backend.use_ipv6() else [])
 def includes_port(ports):
     if ports=='any':return True
     for item in ports.split(','):
         ends=item.split(':');low=int(ends[0]);high=int(ends[-1])
-        if low<=port<=high:return True
+        if low<=int(port)<=high:return True
     return False
 for value in networks:
     wanted=ipaddress.ip_network(value,strict=False)
     for rule in backend.get_rules():
         network=ipaddress.ip_network(rule.src,strict=False)
-        if rule.forward or rule.direction!='in' or rule.protocol not in ('any','tcp'):
+        if rule.forward or rule.direction!='in':
             continue
-        if wanted.version!=network.version or not wanted.overlaps(network) or not includes_port(rule.dport):
+        if wanted.version!=network.version or not wanted.overlaps(network):
+            continue
+        if port!='any' and (rule.protocol not in ('any','tcp') or not includes_port(rule.dport)):
             continue
         if rule.action!='allow':
-            raise SystemExit('Existing UFW rule blocks requested SSH access; firewall activation refused')
+            raise SystemExit('Existing UFW rule blocks requested inbound access; firewall activation refused')
+        if port=='any' and (rule.protocol!='any' or rule.dport!='any'):
+            continue
         if wanted.subnet_of(network) and ipaddress.ip_network(rule.dst).prefixlen==0 and rule.sport=='any' and not rule.interface_in:
             break
     else:
-        raise SystemExit('Cannot verify requested SSH access; firewall activation refused')
+        raise SystemExit('Cannot verify requested inbound access; firewall activation refused')
 PY
 }
 
@@ -91,11 +95,11 @@ lock=create_lock('/run/ufw.lock')
 try:
     backend=UFWBackendIptables(False)
     source,peer,port=sys.argv[1:]
-    requested=[(source,22)]
+    requested=[(source,'any' if source else '22')]
     if peer:
         if not port.isdecimal() or not 1<=int(port)<=65535:
             raise ValueError('Invalid current SSH port')
-        requested.insert(0,(peer,int(port)))
+        requested.insert(0,(peer,port))
     wanted=[]
     for address,number in requested:
         networks=[ipaddress.ip_network(address,strict=False)] if address else [ipaddress.ip_network('0.0.0.0/0')]
@@ -103,8 +107,8 @@ try:
             networks.append(ipaddress.ip_network('::/0'))
         for network in networks:
             if network.version==6 and not backend.use_ipv6():
-                raise ValueError('IPv6 SSH source requires IPv6 support in UFW')
-            rule=UFWRule('allow','tcp',dport=str(number),src=str(network),dst='any')
+                raise ValueError('IPv6 source requires IPv6 support in UFW')
+            rule=UFWRule('allow','any' if number=='any' else 'tcp',dport=number,src=str(network),dst='any')
             rule.set_v6(network.version==6)
             rule.normalize()
             if not any(rule.match(old)==0 for old in wanted):
@@ -145,13 +149,14 @@ try:
             for rule in wanted:
                 if rule.v6!=v6: continue
                 # Separate managed tuples avoid UFW's duplicate/action matching.
-                marker='FamilyTraffic SSH management'.encode().hex()
-                block='\n### tuple ### allow tcp '+rule.dport+' '+rule.dst+' any '+rule.src+' in comment='+marker+'\n'
-                block+='-A '+chain+' '+rule.format_rule()+'\n'
+                marker=('FamilyTraffic trusted source' if rule.protocol=='any' else 'FamilyTraffic SSH management').encode().hex()
+                block='\n### tuple ### allow '+rule.protocol+' '+rule.dport+' '+rule.dst+' any '+rule.src+' in comment='+marker+'\n'
+                block+='-A '+chain+' '+rule.format_rule().replace('-p all ', '', 1)+'\n'
                 text=text.replace(block,'')
                 blocks.append(block)
                 network=ipaddress.ip_network(rule.src,strict=False)
-                permissions.append('-A '+chain+(' -s '+str(network) if network.prefixlen else '')+' -p tcp -m tcp --dport '+rule.dport+' -j ACCEPT')
+                ports=' -p tcp -m tcp --dport '+rule.dport if rule.protocol=='tcp' else ''
+                permissions.append('-A '+chain+(' -s '+str(network) if network.prefixlen else '')+ports+' -j ACCEPT')
             lines=text.splitlines(keepends=True)
             position=next((i for i,line in enumerate(lines) if line.startswith(('### RULES ###','### tuple ###','-A ','-I ','COMMIT'))),None)
             if position is None:
@@ -183,7 +188,7 @@ try:
             print('UFW recovery failed: '+'; '.join(failures),file=sys.stderr)
         raise
 except Exception as error:
-    print('Cannot reconcile SSH firewall rules: '+str(error),file=sys.stderr)
+    print('Cannot reconcile inbound firewall rules: '+str(error),file=sys.stderr)
     sys.exit(1)
 finally:
     release_lock(lock)
@@ -231,8 +236,8 @@ PY
 
 # Add access before enabling UFW. Never reset policy or remove existing rules.
 configure_install_firewall() {
-    local source="${1-}" peer peer_port status connection
-    validate_ssh_source "$source" || { echo 'Invalid SSH source address' >&2; return 1; }
+    local source="${1-}" peer peer_port status connection selected_port=22
+    validate_ssh_source "$source" || { echo 'Invalid trusted firewall source' >&2; return 1; }
     connection="${SSH_CONNECTION:-$(current_ssh_connection)}" || return 1
     if [[ -n "$connection" ]]; then
         read -r peer _ _ peer_port <<< "$connection"
@@ -243,7 +248,8 @@ configure_install_firewall() {
     if [[ -n "$connection" ]]; then
         verify_ssh_firewall_rules "$peer" "$peer_port" || return 1
     fi
-    verify_ssh_firewall_rules "$source" 22 || return 1
+    [[ -z "$source" ]] || selected_port=any
+    verify_ssh_firewall_rules "$source" "$selected_port" || return 1
     status=$(LC_ALL=C ufw status) || return 1
     if ! grep -q '^Status: active$' <<< "$status"; then
         enable_install_firewall || return 1
