@@ -107,7 +107,12 @@ ENV
     export VLESS_HOME="$root" ENV_FILE="$root/.env" CLIENTS_DIR="$root/clients"
     source "$BATS_TEST_DIRNAME/../../lib/user_management.sh"
     export_all_proxy_configs alice fixture-password
-    [ "$(cat "$CLIENTS_DIR/alice/http_config.txt")" = 'https://alice:fixture-password@service.test:443' ]
+    [ "$(cat "$CLIENTS_DIR/alice/http_config.txt")" = 'https://alice:fixture-password@service.test' ]
+    run grep -rF 'service.test:443' "$CLIENTS_DIR/alice"
+    [ "$status" -eq 1 ]
+    [ "$(FT_HTTPS_PROXY_PORT=9443 proxy_client_address http)" = https://service.test:9443 ]
+    [ "$(FT_HTTPS_PROXY_PORT='' FT_HTTP_PLAIN_PORT=443 proxy_client_address http)" = http://service.test:443 ]
+    [ "$(FT_SOCKS_TLS_PORT=443 proxy_client_address socks5)" = socks5s://service.test:443 ]
     [ ! -e "$CLIENTS_DIR/alice/socks5_config.txt" ]
     ! grep -qi socks5 "$CLIENTS_DIR/alice/git_config.txt"
 }
@@ -296,6 +301,7 @@ ENV
             *) return 0 ;;
         esac
     }
+    chmod 644 "$XRAY_CONFIG"
     run add_transport ws SERVICE.test
     [ "$status" != 0 ]
     [[ "$output" == *conflict* ]]
@@ -304,9 +310,12 @@ ENV
     run add_transport ws ws.service.test
     [ "$status" != 0 ]
     [ -e "$root/restart" ]
+    [ "$(stat -c %a "$XRAY_CONFIG")" = 600 ]
     [ ! -e "$TRANSPORTS_JSON" ]
     [ "$(sha256sum "$XRAY_CONFIG" "$root/config/nginx/nginx.conf")" = "$before" ]
+    chmod 644 "$XRAY_CONFIG"
     add_transport ws ws.service.test
+    [ "$(stat -c %a "$XRAY_CONFIG")" = 600 ]
     grep -q ws.service.test "$root/config/nginx/nginx.conf"
     remove_transport ws
     [ "$(cat "$TRANSPORTS_JSON" | jq '.transports | length')" = 0 ]

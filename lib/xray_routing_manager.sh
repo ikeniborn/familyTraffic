@@ -144,7 +144,7 @@ enable_proxy_routing() {
     # Insert or update routing section
     jq --argjson routing "$routing_json" \
         '.routing = $routing' \
-        "$XRAY_CONFIG" > "$temp_file" && write_preserving_inode "$temp_file" "$XRAY_CONFIG"
+        "$XRAY_CONFIG" > "$temp_file" && write_preserving_inode "$temp_file" "$XRAY_CONFIG" 600
 
     if [[ $? -ne 0 ]]; then
         echo -e "${RED}Failed to update Xray config${NC}" >&2
@@ -200,7 +200,7 @@ disable_proxy_routing() {
     # Update routing section
     jq --argjson routing "$routing_json" \
         '.routing = $routing' \
-        "$XRAY_CONFIG" > "$temp_file" && write_preserving_inode "$temp_file" "$XRAY_CONFIG"
+        "$XRAY_CONFIG" > "$temp_file" && write_preserving_inode "$temp_file" "$XRAY_CONFIG" 600
 
     if [[ $? -ne 0 ]]; then
         echo -e "${RED}Failed to update Xray config${NC}" >&2
@@ -275,13 +275,13 @@ update_xray_outbounds() {
         # Add new outbound (insert before "blocked" outbound for proper order)
         jq --argjson outbound "$outbound_json" \
             '.outbounds = [.outbounds[0]] + [$outbound] + .outbounds[1:]' \
-            "$XRAY_CONFIG" > "$temp_file" && write_preserving_inode "$temp_file" "$XRAY_CONFIG"
+            "$XRAY_CONFIG" > "$temp_file" && write_preserving_inode "$temp_file" "$XRAY_CONFIG" 600
         echo "  ✓ Added external-proxy outbound"
     else
         # Update existing outbound
         jq --argjson outbound "$outbound_json" \
             '(.outbounds[] | select(.tag == "external-proxy")) = $outbound' \
-            "$XRAY_CONFIG" > "$temp_file" && write_preserving_inode "$temp_file" "$XRAY_CONFIG"
+            "$XRAY_CONFIG" > "$temp_file" && write_preserving_inode "$temp_file" "$XRAY_CONFIG" 600
         echo "  ✓ Updated external-proxy outbound"
     fi
 
@@ -342,7 +342,7 @@ update_per_user_xray_outbounds() {
         local temp_file
         temp_file=$(mktemp)
         jq '.outbounds = [.outbounds[] | select(.tag | startswith("external-proxy-") | not)]' \
-            "$XRAY_CONFIG" > "$temp_file" && write_preserving_inode "$temp_file" "$XRAY_CONFIG"
+            "$XRAY_CONFIG" > "$temp_file" && write_preserving_inode "$temp_file" "$XRAY_CONFIG" 600
         echo -e "${GREEN}✓ Cleaned up external proxy outbounds${NC}"
         return 0
     fi
@@ -384,13 +384,13 @@ update_per_user_xray_outbounds() {
             # Add new outbound (insert after "direct", before "blocked")
             jq --argjson outbound "$outbound_json" \
                 '.outbounds = [.outbounds[0]] + [$outbound] + .outbounds[1:]' \
-                "$XRAY_CONFIG" > "$temp_file" && write_preserving_inode "$temp_file" "$XRAY_CONFIG"
+                "$XRAY_CONFIG" > "$temp_file" && write_preserving_inode "$temp_file" "$XRAY_CONFIG" 600
             echo "    ✓ Added outbound: $outbound_tag"
         else
             # Update existing outbound
             jq --argjson outbound "$outbound_json" --arg tag "$outbound_tag" \
                 '(.outbounds[] | select(.tag == $tag)) = $outbound' \
-                "$XRAY_CONFIG" > "$temp_file" && write_preserving_inode "$temp_file" "$XRAY_CONFIG"
+                "$XRAY_CONFIG" > "$temp_file" && write_preserving_inode "$temp_file" "$XRAY_CONFIG" 600
             echo "    ✓ Updated outbound: $outbound_tag"
         fi
 
@@ -417,7 +417,7 @@ update_per_user_xray_outbounds() {
                     true
                 end
             )]' \
-            "$XRAY_CONFIG" > "$temp_file" && write_preserving_inode "$temp_file" "$XRAY_CONFIG"
+            "$XRAY_CONFIG" > "$temp_file" && write_preserving_inode "$temp_file" "$XRAY_CONFIG" 600
 
         echo "  ✓ Cleaned up orphaned outbounds"
     fi
@@ -452,7 +452,7 @@ remove_xray_outbound() {
 
     # Remove outbound with tag "external-proxy"
     jq '.outbounds = [.outbounds[] | select(.tag != "external-proxy")]' \
-        "$XRAY_CONFIG" > "$temp_file" && write_preserving_inode "$temp_file" "$XRAY_CONFIG"
+        "$XRAY_CONFIG" > "$temp_file" && write_preserving_inode "$temp_file" "$XRAY_CONFIG" 600
 
     if [[ $? -ne 0 ]]; then
         echo -e "${RED}Failed to remove outbound${NC}" >&2
@@ -522,7 +522,7 @@ add_routing_rule() {
     # Add rule to routing.rules array
     jq --argjson rule "$rule_json" \
         '.routing.rules += [$rule]' \
-        "$XRAY_CONFIG" > "$temp_file" && write_preserving_inode "$temp_file" "$XRAY_CONFIG"
+        "$XRAY_CONFIG" > "$temp_file" && write_preserving_inode "$temp_file" "$XRAY_CONFIG" 600
 
     if [[ $? -ne 0 ]]; then
         echo -e "${RED}Failed to add routing rule${NC}" >&2
@@ -706,7 +706,7 @@ EOF
            [[ $(jq -r '.routing' "$XRAY_CONFIG") == "null" ]]; then
             local temp_file=$(mktemp)
             jq '.routing = {"domainStrategy": "AsIs", "rules": []}' "$XRAY_CONFIG" > "$temp_file" && \
-                write_preserving_inode "$temp_file" "$XRAY_CONFIG"
+                write_preserving_inode "$temp_file" "$XRAY_CONFIG" 600
             echo "  ℹ️  Initialized routing section" >&2
         fi
     fi

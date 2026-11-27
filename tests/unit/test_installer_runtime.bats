@@ -122,3 +122,22 @@ setup() {
     echo "$output"
     [ "$status" -eq 0 ]
 }
+
+@test "private in-place writes restrict new and legacy files before copying secrets" {
+    source "$PROJECT_ROOT/lib/common.sh"
+    umask 022
+    local dst="$BATS_TEST_TMPDIR/xray.json" src="$BATS_TEST_TMPDIR/staged"
+    cat() {
+        [ "$(stat -c %a "$dst")" = 600 ] || return 1
+        command cat "$@"
+    }
+    printf 'fixture' > "$src"
+    write_preserving_inode "$src" "$dst" 600
+    local inode
+    inode=$(stat -c %i "$dst")
+    chmod 644 "$dst"
+    printf 'updated' > "$src"
+    write_preserving_inode "$src" "$dst" 600
+    [ "$(stat -c %i "$dst")" = "$inode" ]
+    [ "$(cat "$dst")" = updated ]
+}
